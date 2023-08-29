@@ -13,7 +13,7 @@ you@box:~$ /path/to/perlpv sourcefile targetfile
 and you'll get a dynamic, interactive display that updates itself once per second while the transfer progresses, like so:
 
 ````
-jim@elden:~/git/perlpv$ ./perlpv ../../sourcefile /dev/null
+jim@elden:~/git/perlpv$ ./perlpv ../sourcefile /dev/null
     Transferred 2.0GiB (at average rate 3.3GiB/sec)
 jim@elden:~/git/perlpv$ 
 ````
