@@ -20,13 +20,11 @@ my $blocksize = 1024 * 1024;
 
 my $begin = Time::HiRes::time;
 
-open_files($SOURCE, $TARGET, $blocksize);
+	open_files($SOURCE, $TARGET, $blocksize);
 
-my $source_size = -s $SOURCE;
+	transfer_data();
 
-transfer_data();
-
-close_files($SOURCE, $TARGET);
+	close_files($SOURCE, $TARGET);
 
 my $end = Time::HiRes::time;
 
@@ -84,7 +82,7 @@ sub display_progress {
 		$source_size = '';
 	}
 
-	print STDERR "Transferred $printable_bytes_read" . $source_size . " (at average rate $transfer_rate)\n";
+	print STDERR "    Transferred $printable_bytes_read" . $source_size . " (at average rate $transfer_rate)\n";
 	$last_printed = Time::HiRes::time;
 }
 
