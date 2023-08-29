@@ -53,9 +53,9 @@ sub transfer_data {
 	        	or die $! ? "Error writing to $TARGET: $!"
 			: "Exit status $? from $TARGET";
 	
-		# ugly, rough homemade progress meter that updates once per second
+		# updates visible progress twice per second
 		$now = Time::HiRes::time;
-		if ( ($now - $last_printed) >=1 ) { 
+		if ( ($now - $last_printed) >=0.5 ) { 
 			my $time_elapsed = $now - $begin;
 
 			display_progress ($total_bytes_read, $source_size, $time_elapsed);
@@ -88,8 +88,48 @@ sub display_progress {
 	my $display_source_size;
 	if ($source_size) { $display_source_size = " of " . printable_bytes ($source_size); }
 
-	print STDERR "    Transferred $printable_bytes_read" . $display_source_size . " (at average rate $display_transfer_rate)\n";
+	my $estimated_time_remaining;
+	my $display_estimated_time_remaining;
+	if ($source_size && $remaining_data) {
+		$estimated_time_remaining = $remaining_data / $transfer_rate;
+		$display_estimated_time_remaining = ", estimated completion in " . printable_seconds($estimated_time_remaining) ;
+	}
+
+	print STDERR "    Transferred $printable_bytes_read" . $display_source_size . " (at average rate $display_transfer_rate)" . $display_estimated_time_remaining . "\n";
 	$last_printed = Time::HiRes::time;
+}
+
+sub printable_seconds {
+	my $seconds = shift;
+	my $printable_seconds;
+
+	my $days;
+	my $hours;
+	my $minutes;
+
+	if ($seconds >= 60*60*24) {
+		$days = sprintf("%d",$seconds/60/60/24);
+		$seconds = $seconds - $days*60*60*24;
+	}
+
+	if ($seconds >= 60*60) {
+		$hours = sprintf("%d",($seconds/60/60));
+		$seconds = $seconds - $hours*60*60;
+	}
+
+	if ($seconds >=60) {
+		$minutes = sprintf("%d",($seconds/60));
+		$seconds = $seconds - $minutes*60;
+	}
+
+	$hours = sprintf("%02d",$hours);
+	$minutes = sprintf("%02d",$minutes);
+	$seconds = sprintf("%02d",$seconds);
+
+	$printable_seconds = "$hours:$minutes:$seconds";
+	if ($days) { $printable_seconds = "$days days, $printable_seconds"; }
+
+	return $printable_seconds;
 }
 
 sub printable_bytes {
