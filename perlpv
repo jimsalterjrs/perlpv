@@ -1,0 +1,138 @@
+#!/usr/bin/perl
+
+use 5.010;
+use IO::Handle '_IOLBF';
+
+# We need to turn off buffering of STDOUT to get rapid display of progress.
+STDOUT->autoflush(1);
+
+my $cursorup = "\033[1A";
+my $cursordown = "\033[1B";
+my $beginline = "\033[1E";
+my $cleartoend = "\033[K";
+my $clearline = $beginline . $cursorup . $cleartoend;
+
+my $SOURCE = $ARGV[0];
+my $TARGET = $ARGV[1];
+
+# Set transfer blocksize to 1MiB. This doesn't appear to affect transfer rate MUCH, at least on my (i9-12900K) system. But it 
+#                                 does appear SLIGHTLY faster, at least for the inital couple of seconds, than using 64KiB.
+my $blocksize = 1024 * 1024;   
+
+open_files($SOURCE, $TARGET, $blocksize);
+
+my $source_size = -s $SOURCE;
+
+transfer_data();
+
+close_files($SOURCE, $TARGET);
+
+exit 0;
+
+
+sub transfer_data {
+	# perl sysread returns a value equal to the number of bytes read, or 0 if it's past EOF.
+	my $returncode = 1;
+
+	my $total_bytes_read=0;
+	my $last_printed = time();
+	my $begin = time();
+	my $now;
+	my $last_printed = $begin;
+
+	# dump a clean newline in at the start, so we don't erase existing stuff in the terminal
+	print "\n";
+
+	while ($returncode ne 0) {
+		$returncode = sysread (SOURCE, my $buffer, $blocksize);
+		$total_bytes_read += length($buffer);
+
+		print TARGET $buffer
+	        	or die $! ? "Error writing to $TARGET: $!"
+			: "Exit status $? from $TARGET";
+	
+		# ugly, rough homemade progress meter that updates once per second
+		$now = time();
+		if ($now > $last_printed) { 
+			my $time_elapsed = $now - $begin;
+
+			display_progress ($total_bytes_read, $source_size, $time_elapsed);
+			$last_printed = time();
+		}
+	}
+
+	$time_elapsed = time() - $begin;
+	if ($time_elapsed < 1) { $time_elapsed = 1; }
+	display_progress ($total_bytes_read, $source_size, $time_elapsed);
+
+}
+
+sub display_progress {
+	my $total_bytes_read = shift;
+	my $source_size = shift;
+	my $time_elapsed = shift;
+	my $now = time();
+	my $printable_bytes_read = printable_bytes ($total_bytes_read);
+	my $transfer_rate;
+	if ($time_elapsed) { $transfer_rate = printable_bytes ($total_bytes_read / $time_elapsed) . "/sec"; }
+
+	print $clearline;
+
+	if ($source_size) {
+		$source_size = " of " . printable_bytes ($source_size);
+	} else {
+		$source_size = '';
+	}
+
+	print STDERR "Transferred $printable_bytes_read" . $source_size . " (at average rate $transfer_rate)\n";
+	$last_printed = $now;
+}
+
+sub printable_bytes {
+	my $bytes = shift;
+	my $printable_bytes;
+
+        if ($bytes > 1024*1024*1024*1024) {
+                $printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024/1024) . 'TiB';
+        } elsif ($bytes > 1024*1024*1024) {
+                $printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024) . 'GiB';
+        } elsif ($bytes > 1024*1024) {
+                $printable_bytes = sprintf("%.1f",$bytes/1024/1024) . 'MiB';
+        } else {
+                $printable_bytes = sprintf("%d",$bytes/1024) . 'KiB';
+        }
+
+	return $printable_bytes;
+}
+
+sub close_files {
+
+	my $SOURCE = shift;
+	my $TARGET = shift;
+
+	close SOURCE
+		or print $! ? "Error closing source file $SOURCE: $!"
+		: "Exit status $? from $SOURCE\n";
+	close TARGET
+		or print $! ? "Error closing target file $TARGET: $!"
+		: "Exit status $? from $TARGET\n";
+}
+
+sub open_files {
+
+	my $SOURCE = shift;
+	my $TARGET = shift;
+	my $blocksize = shift;
+
+	sysopen SOURCE, $SOURCE, "O_RDONLY"
+        	or print $! ? "Error opening source file $SOURCE: $!"
+	        : "Exit status $? from sysopen SOURCE,$SOURCE,O_RDONLY\n";
+	binmode SOURCE;
+
+	
+	open TARGET, ">", "$TARGET"
+        	or print $! ? "Error opening target file $TARGET: $!"
+	        : "Exit status $? from open TARGET,>,$TARGET\n";
+	binmode TARGET;
+
+}
