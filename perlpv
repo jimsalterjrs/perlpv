@@ -1,7 +1,6 @@
 #!/usr/bin/perl
 
-use 5.010;
-use IO::Handle '_IOLBF';
+use Time::HiRes;
 
 # We need to turn off buffering of STDOUT to get rapid display of progress.
 STDOUT->autoflush(1);
@@ -19,6 +18,8 @@ my $TARGET = $ARGV[1];
 #                                 does appear SLIGHTLY faster, at least for the inital couple of seconds, than using 64KiB.
 my $blocksize = 1024 * 1024;   
 
+my $begin = Time::HiRes::time;
+
 open_files($SOURCE, $TARGET, $blocksize);
 
 my $source_size = -s $SOURCE;
@@ -26,6 +27,8 @@ my $source_size = -s $SOURCE;
 transfer_data();
 
 close_files($SOURCE, $TARGET);
+
+my $end = Time::HiRes::time;
 
 exit 0;
 
@@ -35,10 +38,9 @@ sub transfer_data {
 	my $returncode = 1;
 
 	my $total_bytes_read=0;
-	my $last_printed = time();
-	my $begin = time();
+	my $begin = Time::HiRes::time;
+	my $last_printed = Time::HiRes::time;
 	my $now;
-	my $last_printed = $begin;
 
 	# dump a clean newline in at the start, so we don't erase existing stuff in the terminal
 	print "\n";
@@ -52,17 +54,16 @@ sub transfer_data {
 			: "Exit status $? from $TARGET";
 	
 		# ugly, rough homemade progress meter that updates once per second
-		$now = time();
-		if ($now > $last_printed) { 
+		$now = Time::HiRes::time;
+		if ( ($now - $last_printed) >=1 ) { 
 			my $time_elapsed = $now - $begin;
 
 			display_progress ($total_bytes_read, $source_size, $time_elapsed);
-			$last_printed = time();
+			$last_printed = Time::HiRes::time;
 		}
 	}
 
-	$time_elapsed = time() - $begin;
-	if ($time_elapsed < 1) { $time_elapsed = 1; }
+	$time_elapsed = Time::HiRes::time - $begin;
 	display_progress ($total_bytes_read, $source_size, $time_elapsed);
 
 }
@@ -71,7 +72,6 @@ sub display_progress {
 	my $total_bytes_read = shift;
 	my $source_size = shift;
 	my $time_elapsed = shift;
-	my $now = time();
 	my $printable_bytes_read = printable_bytes ($total_bytes_read);
 	my $transfer_rate;
 	if ($time_elapsed) { $transfer_rate = printable_bytes ($total_bytes_read / $time_elapsed) . "/sec"; }
@@ -85,18 +85,18 @@ sub display_progress {
 	}
 
 	print STDERR "Transferred $printable_bytes_read" . $source_size . " (at average rate $transfer_rate)\n";
-	$last_printed = $now;
+	$last_printed = Time::HiRes::time;
 }
 
 sub printable_bytes {
 	my $bytes = shift;
 	my $printable_bytes;
 
-        if ($bytes > 1024*1024*1024*1024) {
+        if ($bytes >= 1024*1024*1024*1024) {
                 $printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024/1024) . 'TiB';
-        } elsif ($bytes > 1024*1024*1024) {
+        } elsif ($bytes >= 1024*1024*1024) {
                 $printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024) . 'GiB';
-        } elsif ($bytes > 1024*1024) {
+        } elsif ($bytes >= 1024*1024) {
                 $printable_bytes = sprintf("%.1f",$bytes/1024/1024) . 'MiB';
         } else {
                 $printable_bytes = sprintf("%d",$bytes/1024) . 'KiB';
