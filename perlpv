@@ -34,12 +34,6 @@ exit 0;
 sub transfer_data {
 	my $source_size = shift;
 
-	if ($source_size) { 
-		$source_size = printable_bytes ($source_size); 
-	} else {
-		$source_size = '';
-	}
-
 	# perl sysread returns a value equal to the number of bytes read, or 0 if it's past EOF.
 	my $returncode = 1;
 
@@ -78,19 +72,23 @@ sub display_progress {
 	my $total_bytes_read = shift;
 	my $source_size = shift;
 	my $time_elapsed = shift;
-	my $printable_bytes_read = printable_bytes ($total_bytes_read);
-	my $transfer_rate;
-	if ($time_elapsed) { $transfer_rate = printable_bytes ($total_bytes_read / $time_elapsed) . "/sec"; }
 
+	my $printable_bytes_read = printable_bytes ($total_bytes_read);
+
+	my $transfer_rate;
+	if ($time_elapsed) { $transfer_rate = $total_bytes_read / $time_elapsed; }
+	my $display_transfer_rate;
+	if ($transfer_rate) { $display_transfer_rate = printable_bytes ($transfer_rate) . "/sec"; }
+	
+	my $remaining_data = $source_size - $total_bytes_read;
+	
+	# clear last status line before printing a new one
 	print $clearline;
 
-	if ($source_size) {
-		$source_size = " of $source_size";
-	} else {
-		$source_size = '';
-	}
+	my $display_source_size;
+	if ($source_size) { $display_source_size = " of " . printable_bytes ($source_size); }
 
-	print STDERR "    Transferred $printable_bytes_read" . $source_size . " (at average rate $transfer_rate)\n";
+	print STDERR "    Transferred $printable_bytes_read" . $display_source_size . " (at average rate $display_transfer_rate)\n";
 	$last_printed = Time::HiRes::time;
 }
 
