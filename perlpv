@@ -40,63 +40,126 @@ sub transfer_data {
 	my $total_bytes_read=0;
 	my $begin = Time::HiRes::time;
 	my $last_printed = Time::HiRes::time;
-	my $now;
+
+	# We need to keep a running tally of point-in-time transfer rates for improved accuracy
+	# in progress bar completion estimates.
+	my @rate_history;
 
 	# dump a clean newline in at the start, so we don't erase existing stuff in the terminal
 	print "\n";
 
 	while ($returncode ne 0) {
+		# note the time before reading each source block
+		my $timestamp_before_reading = Time::HiRes::time;
+
 		$returncode = sysread (SOURCE, my $buffer, $blocksize);
-		$total_bytes_read += length($buffer);
+		$current_bytes_read = length($buffer);
+		$total_bytes_read += $current_bytes_read;
 
 		print TARGET $buffer
 	        	or die $! ? "Error writing to $TARGET: $!"
 			: "Exit status $? from $TARGET";
-	
-		# updates visible progress twice per second
-		$now = Time::HiRes::time;
-		if ( ($now - $last_printed) >=0.5 ) { 
-			my $time_elapsed = $now - $begin;
+		
+		# note the time after successfully writing each block
+		my $timestamp_after_writing = Time::HiRes::time;
 
-			display_progress ($total_bytes_read, $source_size, $time_elapsed);
+		# calculate transfer rate of this block
+		my $current_time_elapsed = $timestamp_after_writing - $timestamp_before_reading;
+		if ($current_time_elapsed eq 0) { $current_time_elapsed = 1; }
+		my $instantaneous_transfer_rate = ( $current_bytes_read / $current_time_elapsed );
+
+		push (@rate_history,"$timestamp_after_writing,$instantaneous_transfer_rate");
+
+		# updates visible progress twice per second
+		if ( ($timestamp_after_writing - $last_printed) >=0.5 ) { 
+			my $time_elapsed = $timestamp_after_writing - $begin;
+			
+			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history);
 			$last_printed = Time::HiRes::time;
 		}
 	}
 
 	$time_elapsed = Time::HiRes::time - $begin;
-	display_progress ($total_bytes_read, $source_size, $time_elapsed);
-
+	display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history);
 }
 
 sub display_progress {
 	my $total_bytes_read = shift;
 	my $source_size = shift;
 	my $time_elapsed = shift;
+	my $rate_history_reference = shift;
 
 	my $printable_bytes_read = printable_bytes ($total_bytes_read);
 
-	my $transfer_rate;
-	if ($time_elapsed) { $transfer_rate = $total_bytes_read / $time_elapsed; }
-	my $display_transfer_rate;
-	if ($transfer_rate) { $display_transfer_rate = printable_bytes ($transfer_rate) . "/sec"; }
+	# process @rate_history to get 5m, 1m, 10s, and most-recent average rates
+	my @five_minute_rate;
+	my @one_minute_rate;
+	my @ten_second_rate;
+	my $now = Time::HiRes::time;
+
+	for my $index (reverse 0 .. (scalar(@{$rate_history_reference})-1) ) {
+		my $row = ${$rate_history_reference}[$index];
+
+		my ($time,$rate) = split(/,/,$row);
+		my $age = $now-$time;
+
+		# transfers that happened in the last ten seconds
+		if ($age <= 10) { push (@ten_second_rate,$rate); }
+		# transfers that happened in the last minute
+		if ($age <= 60) { push (@one_minute_rate,$rate); }
+		# transfers that happened in the last five minutes
+		if ($age <= 60*5) { push (@five_minute_rate,$rate); ;}
+		# remove any rows older than five minutes
+		if ($age > 5*60) { 
+			splice (@{$rate_history_reference}, $index); 
+		}
+	}
+
+	# put together 5m,1m,and 10s rolling averages
+	my $five_minute_mean = average_array(@five_minute_rate);
+	my $one_minute_mean = average_array(@one_minute_rate);
+	my $ten_second_mean = average_array(@ten_second_rate);
+
+	# get the instaneous (most recent single block) rate
+	my $rate_history_elements = scalar (@{$rate_history_reference});
+	my $current_row = ${$rate_history_reference}[$rate_history_elements-1];
+	my ($current_time,$current_rate) = split (/,/,$current_row);
 	
+	# average our four rates to get a final guesstimated rate
+	my @non_null_rates;
+	if ($#five_minute_mean) { push (@non_null_rates,$five_minute_mean); }
+	if ($#one_minute_mean) { push (@non_null_rates,$five_minute_mean); }
+	if ($#ten_second_mean) { push (@non_null_rates,$five_minute_mean); }
+	if ($current_rate) { push (@non_null_rates,$current_rate); }
+	my $transfer_rate = average_array (@non_null_rates);
+	my $display_transfer_rate = printable_bytes ($transfer_rate) . "/sec";
+
 	my $remaining_data = $source_size - $total_bytes_read;
-	
+
 	# clear last status line before printing a new one
-	print $clearline;
+	print STDERR $clearline;
 
 	my $display_source_size;
 	if ($source_size) { $display_source_size = " of " . printable_bytes ($source_size); }
 
 	my $estimated_time_remaining;
 	my $display_estimated_time_remaining;
-	if ($source_size && $remaining_data) {
+
+	if ($source_size && $remaining_data && $transfer_rate) {
 		$estimated_time_remaining = $remaining_data / $transfer_rate;
 		$display_estimated_time_remaining = ", estimated completion in " . printable_seconds($estimated_time_remaining) ;
 	}
 
 	print STDERR "    Transferred $printable_bytes_read" . $display_source_size . " (at average rate $display_transfer_rate)" . $display_estimated_time_remaining . "\n";
 	$last_printed = Time::HiRes::time;
+}
+
+sub average_array {
+	my @array = @_;
+	my $sum;
+	if ($#array < 1) { return 0; }
+	foreach (@array) { $sum+= $_; }
+	return $sum/$#array;
 }
 
 sub printable_seconds {
@@ -155,10 +218,10 @@ sub close_files {
 	my $TARGET = shift;
 
 	close SOURCE
-		or print $! ? "Error closing source file $SOURCE: $!"
+		or die $! ? "Error closing source file $SOURCE: $!"
 		: "Exit status $? from $SOURCE\n";
 	close TARGET
-		or print $! ? "Error closing target file $TARGET: $!"
+		or die $! ? "Error closing target file $TARGET: $!"
 		: "Exit status $? from $TARGET\n";
 }
 
@@ -168,15 +231,24 @@ sub open_files {
 	my $TARGET = shift;
 	my $blocksize = shift;
 
+	# if SOURCE is a file, a -s check is all we need to find its size
+	my $size = -s $SOURCE;
+
+	if (-b $SOURCE || -c $SOURCE) { 
+		# this is a block device or character device, -s won't work
+		open TEST, "<", $SOURCE;
+		seek TEST, 0, 2;
+		$size = tell TEST;
+		close TEST;
+	}
+
 	sysopen SOURCE, $SOURCE, "O_RDONLY"
-        	or print $! ? "Error opening source file $SOURCE: $!"
+        	or die $! ? "Error opening source file $SOURCE: $!"
 	        : "Exit status $? from sysopen SOURCE,$SOURCE,O_RDONLY\n";
 	binmode SOURCE;
 
-	my $size = -s $SOURCE;
-	
 	open TARGET, ">", "$TARGET"
-        	or print $! ? "Error opening target file $TARGET: $!"
+        	or die $! ? "Error opening target file $TARGET: $!"
 	        : "Exit status $? from open TARGET,>,$TARGET\n";
 	binmode TARGET;
 
