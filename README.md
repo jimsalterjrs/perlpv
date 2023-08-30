@@ -13,7 +13,17 @@ you@box:~$ /path/to/perlpv sourcefile targetfile
 and you'll get a dynamic, interactive display that updates itself once per second while the transfer progresses, like so:
 
 ````
-jim@elden:~/git/perlpv$ ./perlpv ../sourcefile /dev/null
-    Transferred 2.0GiB (at average rate 3.3GiB/sec)
-jim@elden:~/git/perlpv$ 
+jim@elden:~$ sudo ./perlpv /dev/nvme0n1 /dev/null
+    Transferred 7.6GiB of 1.8TiB (at average rate 4.9GiB/sec), estimated completion in 00:06:21
+^C
+jim@elden:~$
 ````
+
+The averate rate (and estimated completion) are derived by keeping separate running averages for transfer rates:
+    * last five minutes
+    * last minute
+    * last ten seconds
+    * most recently transferred block
+These four queues are then averaged together to get the displayed average transfer rate, which is then used to estimate
+time to completion.
+
