@@ -19,11 +19,8 @@ jim@elden:~$ sudo ./perlpv /dev/nvme0n1 /dev/null
 jim@elden:~$
 ````
 
-The averate rate (and estimated completion) are derived by keeping separate running averages for transfer rates:
-    * last five minutes
-    * last minute
-    * last ten seconds
-    * most recently transferred block
-These four queues are then averaged together to get the displayed average transfer rate, which is then used to estimate
+The averate rate (and estimated completion) are derived by keeping separate running averages for transfer rates for the
+last five minutes, last one minute, and the last ten seconds. These three averages plus the transfer rate for the last
+block copied are then averaged together to get the displayed average transfer rate, which is also used to estimate
 time to completion.
 
