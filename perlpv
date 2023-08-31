@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 
-use Time::HiRes;
+use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC);
 
 # We need to turn off buffering of STDOUT to get rapid display of progress.
 STDOUT->autoflush(1);
@@ -18,7 +18,7 @@ my $TARGET = $ARGV[1];
 #                                 does appear SLIGHTLY faster, at least for the inital couple of seconds, than using 64KiB.
 my $blocksize = 1024 * 1024;   
 
-my $begin = Time::HiRes::time;
+my $begin = monotime;
 
 	my $size = open_files($SOURCE, $TARGET, $blocksize);
 
@@ -26,10 +26,13 @@ my $begin = Time::HiRes::time;
 
 	close_files($SOURCE, $TARGET);
 
-my $end = Time::HiRes::time;
+my $end = monotime;
 
 exit 0;
 
+sub monotime {
+	clock_gettime(CLOCK_MONOTONIC)
+}
 
 sub transfer_data {
 	my $source_size = shift;
@@ -38,8 +41,8 @@ sub transfer_data {
 	my $returncode = 1;
 
 	my $total_bytes_read=0;
-	my $begin = Time::HiRes::time;
-	my $last_printed = Time::HiRes::time;
+	my $begin = monotime;
+	my $last_printed = monotime;
 
 	# We need to keep a running tally of point-in-time transfer rates for improved accuracy
 	# in progress bar completion estimates.
@@ -50,7 +53,7 @@ sub transfer_data {
 
 	while ($returncode ne 0) {
 		# note the time before reading each source block
-		my $timestamp_before_reading = Time::HiRes::time;
+		my $timestamp_before_reading = monotime;
 
 		$returncode = sysread (SOURCE, my $buffer, $blocksize);
 		$current_bytes_read = length($buffer);
@@ -61,7 +64,7 @@ sub transfer_data {
 			: "Exit status $? from $TARGET";
 		
 		# note the time after successfully writing each block
-		my $timestamp_after_writing = Time::HiRes::time;
+		my $timestamp_after_writing = monotime;
 
 		# calculate transfer rate of this block
 		my $current_time_elapsed = $timestamp_after_writing - $timestamp_before_reading;
@@ -75,11 +78,11 @@ sub transfer_data {
 			my $time_elapsed = $timestamp_after_writing - $begin;
 			
 			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history);
-			$last_printed = Time::HiRes::time;
+			$last_printed = monotime;
 		}
 	}
 
-	$time_elapsed = Time::HiRes::time - $begin;
+	$time_elapsed = monotime - $begin;
 	display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history);
 }
 
@@ -95,7 +98,7 @@ sub display_progress {
 	my @five_minute_rate;
 	my @one_minute_rate;
 	my @ten_second_rate;
-	my $now = Time::HiRes::time;
+	my $now = monotime;
 
 	for my $index (reverse 0 .. (scalar(@{$rate_history_reference})-1) ) {
 		my $row = ${$rate_history_reference}[$index];
@@ -151,7 +154,7 @@ sub display_progress {
 	}
 
 	print STDERR "    Transferred $printable_bytes_read" . $display_source_size . " (at average rate $display_transfer_rate)" . $display_estimated_time_remaining . "\n";
-	$last_printed = Time::HiRes::time;
+	$last_printed = monotime;
 }
 
 sub average_array {
