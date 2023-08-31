@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 
-use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC);
+use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC alarm);
 
 # We need to turn off buffering of STDOUT to get rapid display of progress.
 STDOUT->autoflush(1);
@@ -48,39 +48,50 @@ sub transfer_data {
 	# in progress bar completion estimates.
 	my @rate_history;
 
+	my $alarmed = 0;
+
+	# Set up an alarm timer
+	local $SIG{'ALRM'} = sub {
+		$alarmed = 1;
+	};
+
+	alarm(0.5, 0.5);
+
 	# dump a clean newline in at the start, so we don't erase existing stuff in the terminal
 	print "\n";
 
+	my $timestamp_before_reading = monotime;
+	my $current_bytes_read = 0;
 	while ($returncode ne 0) {
-		# note the time before reading each source block
-		my $timestamp_before_reading = monotime;
-
 		$returncode = sysread (SOURCE, my $buffer, $blocksize);
-		$current_bytes_read = length($buffer);
-		$total_bytes_read += $current_bytes_read;
+		$current_bytes_read += length($buffer);
 
 		print TARGET $buffer
 	        	or die $! ? "Error writing to $TARGET: $!"
 			: "Exit status $? from $TARGET";
-		
-		# note the time after successfully writing each block
-		my $timestamp_after_writing = monotime;
 
-		# calculate transfer rate of this block
-		my $current_time_elapsed = $timestamp_after_writing - $timestamp_before_reading;
-		if ($current_time_elapsed eq 0) { $current_time_elapsed = 1; }
-		my $instantaneous_transfer_rate = ( $current_bytes_read / $current_time_elapsed );
+		if ($alarmed) {
+			my $timestamp_after_writing = monotime;
 
-		push (@rate_history,"$timestamp_after_writing,$instantaneous_transfer_rate");
+			$total_bytes_read += $current_bytes_read;
+			# calculate transfer rate of this block
+			my $current_time_elapsed = $timestamp_after_writing - $timestamp_before_reading;
+			if ($current_time_elapsed eq 0) { $current_time_elapsed = 1; }
+			my $instantaneous_transfer_rate = ( $current_bytes_read / $current_time_elapsed );
 
-		# updates visible progress twice per second
-		if ( ($timestamp_after_writing - $last_printed) >=0.5 ) { 
+			push (@rate_history,"$timestamp_after_writing,$instantaneous_transfer_rate");
+
 			my $time_elapsed = $timestamp_after_writing - $begin;
-			
+
 			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history);
-			$last_printed = monotime;
+
+			$alarmed = 0;
+			$timestamp_before_reading = monotime;
+			$current_bytes_read = 0;
 		}
 	}
+
+	alarm(0);
 
 	$time_elapsed = monotime - $begin;
 	display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history);
