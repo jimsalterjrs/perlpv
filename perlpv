@@ -86,6 +86,9 @@ sub transfer_data {
 	# in progress bar completion estimates.
 	my @rate_history;
 
+	# We need to handle the final displayed progress update slightly differently at the end.
+	my $final_progress_update = 0;
+
 	my $alarmed = 0;
 
 	# Set up an alarm timer
@@ -101,6 +104,7 @@ sub transfer_data {
 	my $timestamp_before_reading = monotime;
 	my $current_bytes_read = 0;
 	my $buffer = '';
+
 	while ($returncode ne 0) {
 		$returncode = safe_sysread(SOURCE, $buffer, $blocksize);
 
@@ -131,7 +135,7 @@ sub transfer_data {
 
 			my $time_elapsed = $timestamp_after_writing - $begin;
 
-			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history);
+			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history,$final_progress_update);
 
 			$alarmed = 0;
 			$timestamp_before_reading = monotime;
@@ -139,10 +143,13 @@ sub transfer_data {
 		}
 	}
 
-	alarm(0);
+	$final_progress_update = 1;
 
-	$time_elapsed = monotime - $begin;
-	display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history);
+	# don't use monotime directly in an equation. assign it to a variable first or you will NOT get coherent results.
+	my $end = monotime;
+	my $time_elapsed = $end - $begin;
+	display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history,$final_progress_update);
+	alarm(0);
 }
 
 sub display_progress {
@@ -150,7 +157,8 @@ sub display_progress {
 	my $source_size = shift;
 	my $time_elapsed = shift;
 	my $rate_history_reference = shift;
-
+	my $final_progress_update = shift;
+	
 	my $printable_bytes_read = printable_bytes ($total_bytes_read);
 
 	# process @rate_history to get 5m, 1m, 10s, and most-recent average rates
@@ -181,6 +189,7 @@ sub display_progress {
 	my $five_minute_mean = average_array(@five_minute_rate);
 	my $one_minute_mean = average_array(@one_minute_rate);
 	my $ten_second_mean = average_array(@ten_second_rate);
+	my $printable_aggregate_mean = printable_bytes($total_bytes_read/$time_elapsed) . "/sec";
 
 	# get the instaneous (most recent single block) rate
 	my $rate_history_elements = scalar (@{$rate_history_reference});
@@ -195,6 +204,7 @@ sub display_progress {
 	if ($current_rate) { push (@non_null_rates,$current_rate); }
 	my $transfer_rate = average_array (@non_null_rates);
 	my $display_transfer_rate = printable_bytes ($transfer_rate) . "/sec";
+	my $printable_current_rate = printable_bytes ($current_rate) . "/sec";
 
 	my $remaining_data = $source_size - $total_bytes_read;
 
@@ -211,8 +221,12 @@ sub display_progress {
 		$estimated_time_remaining = $remaining_data / $transfer_rate;
 		$display_estimated_time_remaining = ", estimated completion in " . printable_seconds($estimated_time_remaining) ;
 	}
-
-	print STDERR "    Transferred $printable_bytes_read" . $display_source_size . " (at average rate $display_transfer_rate)" . $display_estimated_time_remaining . "\n";
+	
+	if ($final_progress_update) {
+		print STDERR "    Transferred $printable_bytes_read" . $display_source_size . " (AVG $printable_aggregate_mean) in " . printable_seconds($time_elapsed) . "\n";
+	} else {
+		print STDERR "    Transferred $printable_bytes_read" . $display_source_size . " (AVG $printable_aggregate_mean CUR $printable_current_rate)" . $display_estimated_time_remaining . "\n";
+	}
 	$last_printed = monotime;
 }
 
