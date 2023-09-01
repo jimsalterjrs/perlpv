@@ -70,7 +70,7 @@ sub transfer_data {
 	        	or die $! ? "Error writing to $TARGET: $!"
 			: "Exit status $? from $TARGET";
 
-		if ($alarmed) {
+		if ($alarmed || $returncode eq 0) {
 			my $timestamp_after_writing = monotime;
 
 			$total_bytes_read += $current_bytes_read;
