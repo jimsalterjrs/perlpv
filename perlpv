@@ -34,6 +34,21 @@ sub monotime {
 	clock_gettime(CLOCK_MONOTONIC)
 }
 
+sub full_syswrite {
+	my $file = shift;
+	my $buffer = shift;
+	my $length = shift;
+	my $written = 0;
+
+	while ($written < $length) {
+		my $res = syswrite($file, $buffer, $length - $written, $written);
+		defined($res) or return $res;
+		$written += $res;
+	}
+
+	1
+}
+
 sub transfer_data {
 	my $source_size = shift;
 
@@ -62,13 +77,21 @@ sub transfer_data {
 
 	my $timestamp_before_reading = monotime;
 	my $current_bytes_read = 0;
+	my $buffer;
 	while ($returncode ne 0) {
-		$returncode = sysread (SOURCE, my $buffer, $blocksize);
-		$current_bytes_read += length($buffer);
+		$returncode = sysread (SOURCE, $buffer, $blocksize);
 
-		print TARGET $buffer
+		unless (defined($returncode)) {
+			die "Error reading from $SOURCE: $!"
+		}
+
+		$current_bytes_read += $returncode;
+
+		full_syswrite(TARGET, $buffer, $returncode)
 	        	or die $! ? "Error writing to $TARGET: $!"
 			: "Exit status $? from $TARGET";
+
+		$buffer = '';
 
 		if ($alarmed || $returncode eq 0) {
 			my $timestamp_after_writing = monotime;
