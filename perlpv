@@ -1,6 +1,7 @@
 #!/usr/bin/perl
 
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC alarm);
+use Errno (EINTR);
 
 # We need to turn off buffering of STDOUT to get rapid display of progress.
 STDOUT->autoflush(1);
@@ -34,7 +35,24 @@ sub monotime {
 	clock_gettime(CLOCK_MONOTONIC)
 }
 
-sub full_syswrite {
+# sysread wrapper that automatically handles EINTR
+sub safe_sysread {
+	my ($file, $length) = ($_[0], $_[2]);
+
+	while (1) {
+		my $res = sysread($file, $_[1], $length);
+
+		unless (defined($res)) {
+			$!{EINTR} and next;
+			return $res;
+		}
+
+		return $res;
+	}
+}
+
+# syswrite wrapper that automatically handles EINTR and short writes
+sub safe_syswrite {
 	my $file = shift;
 	my $buffer = shift;
 	my $length = shift;
@@ -42,7 +60,12 @@ sub full_syswrite {
 
 	while ($written < $length) {
 		my $res = syswrite($file, $buffer, $length - $written, $written);
-		defined($res) or return $res;
+
+		unless (defined($res)) {
+			$!{EINTR} and next;
+			return $res;
+		}
+
 		$written += $res;
 	}
 
@@ -77,9 +100,9 @@ sub transfer_data {
 
 	my $timestamp_before_reading = monotime;
 	my $current_bytes_read = 0;
-	my $buffer;
+	my $buffer = '';
 	while ($returncode ne 0) {
-		$returncode = sysread (SOURCE, $buffer, $blocksize);
+		$returncode = safe_sysread(SOURCE, $buffer, $blocksize);
 
 		unless (defined($returncode)) {
 			die "Error reading from $SOURCE: $!"
@@ -87,9 +110,11 @@ sub transfer_data {
 
 		$current_bytes_read += $returncode;
 
-		full_syswrite(TARGET, $buffer, $returncode)
-	        	or die $! ? "Error writing to $TARGET: $!"
-			: "Exit status $? from $TARGET";
+		if ($returncode) {
+			safe_syswrite(TARGET, $buffer, $returncode)
+				or die $! ? "Error writing to $TARGET: $!"
+				: "Exit status $? from $TARGET";
+		}
 
 		$buffer = '';
 
