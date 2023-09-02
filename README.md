@@ -1,5 +1,6 @@
 # perlpv
-A proof-of-concept pipe viewer similar to Andrew Wood's pv in perl, for eventual use internally in syncoid.
+Perlpv is a proof-of-concept pipe viewer similar to Andrew Wood's pv—but written in perl, for eventual use 
+internally in `syncoid`.
 
 You might be surprised just how finicky it is both getting extremely performant file reads and positioning the cursor
 for dynamic display updates in Perl. I wouldn't, because... well, because I've learned otherwise. With any luck,
@@ -21,6 +22,5 @@ jim@elden:~$
 
 The averate rate (and estimated completion) are derived by keeping separate running averages for transfer rates for the
 last five minutes, last one minute, and the last ten seconds. These three averages plus the transfer rate for the last
-block copied are then averaged together to get the displayed average transfer rate, which is also used to estimate
-time to completion.
+block copied are then averaged together to estimate the time to completion.
 
