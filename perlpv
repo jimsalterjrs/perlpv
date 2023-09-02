@@ -210,7 +210,7 @@ sub display_progress {
 	my $message = "  [" . $display_source_size . "]";
 	$message .= " [AVG $printable_aggregate_mean CUR $printable_current_rate" . "] [";
 
-	my $eta = "]             ";;
+	my $eta = "]              ";
 	if ($estimated_time_remaining) { $eta = "] ETA $display_estimated_time_remaining"; }
 	my $messagelength = length ($message) + length ($eta);
 
