@@ -35,48 +35,39 @@ sub monotime {
 	clock_gettime(CLOCK_MONOTONIC)
 }
 
-# sysread wrapper that automatically handles EINTR
-sub safe_sysread {
-	my ($file, $length) = ($_[0], $_[2]);
+# sysread wrapper that returns -1 on alarm interrupt
+sub alarm_sysread {
+	my $res = sysread($_[0], $_[1], $_[2]);
 
-	while (1) {
-		my $res = sysread($file, $_[1], $length);
-
-		unless (defined($res)) {
-			$!{EINTR} and next;
-			return $res;
-		}
-
-		return $res;
+	unless (defined($res)) {
+		$!{EINTR} and return -1;
 	}
+
+	return $res;
 }
 
-# syswrite wrapper that automatically handles EINTR and short writes
-sub safe_syswrite {
+# syswrite wrapper that writes $length bytes from the end of $buffer
+# returns bytes written, -1 on alarm interrupt, or undef on error
+sub alarm_syswrite {
 	my $file = shift;
 	my $buffer = shift;
 	my $length = shift;
-	my $written = 0;
 
-	while ($written < $length) {
-		my $res = syswrite($file, $buffer, $length - $written, $written);
+	my $res = syswrite($file, $buffer, $length, length($buffer) - $length);
 
-		unless (defined($res)) {
-			$!{EINTR} and next;
-			return $res;
-		}
-
-		$written += $res;
+	unless (defined($res)) {
+		$!{EINTR} and return -1;
 	}
 
-	1
+	$res
 }
 
 sub transfer_data {
 	my $source_size = shift;
 
 	# perl sysread returns a value equal to the number of bytes read, or 0 if it's past EOF.
-	my $returncode = 1;
+	# -1 is used to indicate timeout here
+	my $returncode = -1;
 
 	my $total_bytes_read=0;
 	my $begin = monotime;
@@ -103,24 +94,31 @@ sub transfer_data {
 
 	my $timestamp_before_reading = monotime;
 	my $current_bytes_read = 0;
+	my $buffer_pending_bytes = 0;
 	my $buffer = '';
 
-	while ($returncode ne 0) {
-		$returncode = safe_sysread(SOURCE, $buffer, $blocksize);
-
-		unless (defined($returncode)) {
-			die "Error reading from $SOURCE: $!"
+	while ($returncode ne 0 || $buffer_pending_bytes ne 0) {
+		if ($buffer_pending_bytes eq 0) {
+			$buffer = '';
+			$returncode = alarm_sysread(SOURCE, $buffer, $blocksize);
+			unless (defined($returncode)) {
+				die "Error reading from $SOURCE: $!"
+			}
+			if ($returncode > 0) {
+				$current_bytes_read += $returncode;
+				$buffer_pending_bytes = $returncode;
+			}
 		}
 
-		$current_bytes_read += $returncode;
-
-		if ($returncode) {
-			safe_syswrite(TARGET, $buffer, $returncode)
+		if ($buffer_pending_bytes ne 0) {
+			my $written = alarm_syswrite(TARGET, $buffer, $buffer_pending_bytes)
 				or die $! ? "Error writing to $TARGET: $!"
 				: "Exit status $? from $TARGET";
-		}
 
-		$buffer = '';
+			if ($written > 0) {
+				$buffer_pending_bytes -= $written;
+			}
+		}
 
 		if ($alarmed || $returncode eq 0) {
 			my $timestamp_after_writing = monotime;
@@ -143,13 +141,13 @@ sub transfer_data {
 		}
 	}
 
+	alarm(0);
 	$final_progress_update = 1;
 
 	# don't use monotime directly in an equation. assign it to a variable first or you will NOT get coherent results.
 	my $end = monotime;
 	my $time_elapsed = $end - $begin;
 	display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history,$final_progress_update);
-	alarm(0);
 }
 
 sub display_progress {
