@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!/usr/bin/env perl
 
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC alarm);
 use Errno (EINTR);
@@ -33,33 +33,6 @@ exit 0;
 
 sub monotime {
 	clock_gettime(CLOCK_MONOTONIC)
-}
-
-# sysread wrapper that returns -1 on alarm interrupt
-sub alarm_sysread {
-	my $res = sysread($_[0], $_[1], $_[2]);
-
-	unless (defined($res)) {
-		$!{EINTR} and return -1;
-	}
-
-	return $res;
-}
-
-# syswrite wrapper that writes $length bytes from the end of $buffer
-# returns bytes written, -1 on alarm interrupt, or undef on error
-sub alarm_syswrite {
-	my $file = shift;
-	my $buffer = shift;
-	my $length = shift;
-
-	my $res = syswrite($file, $buffer, $length, length($buffer) - $length);
-
-	unless (defined($res)) {
-		$!{EINTR} and return -1;
-	}
-
-	$res
 }
 
 sub transfer_data {
@@ -100,10 +73,13 @@ sub transfer_data {
 	while ($returncode ne 0 || $buffer_pending_bytes ne 0) {
 		if ($buffer_pending_bytes eq 0) {
 			$buffer = '';
-			$returncode = alarm_sysread(SOURCE, $buffer, $blocksize);
+			$returncode = sysread(SOURCE, $buffer, $blocksize);
+
 			unless (defined($returncode)) {
-				die "Error reading from $SOURCE: $!"
+				die "Error reading from $SOURCE: $!" unless $!{EINTR};
+				$returncode = -1;
 			}
+
 			if ($returncode > 0) {
 				$current_bytes_read += $returncode;
 				$buffer_pending_bytes = $returncode;
@@ -111,9 +87,14 @@ sub transfer_data {
 		}
 
 		if ($buffer_pending_bytes ne 0) {
-			my $written = alarm_syswrite(TARGET, $buffer, $buffer_pending_bytes)
-				or die $! ? "Error writing to $TARGET: $!"
-				: "Exit status $? from $TARGET";
+			my $written = syswrite(TARGET, $buffer, $buffer_pending_bytes,
+				length($buffer) - $buffer_pending_bytes);
+
+			unless (defined($written)) {
+				die $! ? "Error writing to $TARGET: $!" : "Exit status $? from $TARGET"
+					unless $!{EINTR};
+				$written = -1;
+			}
 
 			if ($written > 0) {
 				$buffer_pending_bytes -= $written;
