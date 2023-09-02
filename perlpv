@@ -216,7 +216,10 @@ sub display_progress {
 
 	# find terminal length, extrapolate bar length
 	my ($wchar, $hcar, $wpixels, $hpixels) = GetTerminalSize();
-	my $barlength = $wchar - $messagelength;
+	# no more ridiculously over-long meters please
+	if ($wchar > 80) { $wchar = 80; }
+	# leave one extra character for an explicit \n, avoids some mess if the terminal is resized during the run
+	my $barlength = $wchar - $messagelength - 1;
 
 	# build the bar
 	my $percentdone = ($source_size - $remaining_data) / $source_size;
@@ -229,7 +232,7 @@ sub display_progress {
 	
 	$message .= $bartext . $eta;
 	
-	print STDERR "$message";
+	print STDERR "$message\n";
 }
 
 sub average_array {
