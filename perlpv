@@ -15,9 +15,9 @@ my $clearline = $beginline . $cursorup . $cleartoend;
 my $SOURCE = $ARGV[0];
 my $TARGET = $ARGV[1];
 
-# Set transfer blocksize to 1MiB. This doesn't appear to affect transfer rate MUCH, at least on my (i9-12900K) system. But it 
+# Set transfer blocksize to 512KiB. This doesn't appear to affect transfer rate MUCH, at least on my (i9-12900K) system. But it 
 #                                 does appear SLIGHTLY faster, at least for the inital couple of seconds, than using 64KiB.
-my $blocksize = 1024 * 1024;   
+my $blocksize = 1024 * 512;
 
 my $begin = monotime;
 
