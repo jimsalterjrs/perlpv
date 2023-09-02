@@ -22,8 +22,9 @@ my $clearline = $beginline . $cursorup . $cleartoend;
 my $SOURCE = $ARGV[0];
 my $TARGET = $ARGV[1];
 
-# Set transfer blocksize to 512KiB. This doesn't appear to affect transfer rate MUCH, at least on my (i9-12900K) system. But it 
-#                                 does appear SLIGHTLY faster, at least for the inital couple of seconds, than using 64KiB.
+# Set transfer blocksize to 512KiB. This doesn't appear to affect transfer rate MUCH, at least on my
+# (i9-12900K) system. But it does appear SLIGHTLY faster, at least for the inital couple of seconds,
+# than using 64KiB.
 my $blocksize = 1024 * 512;
 
 my $begin = monotime();
@@ -139,7 +140,7 @@ sub display_progress {
 	my $time_elapsed = shift;
 	my $rate_history_reference = shift;
 	my $final_progress_update = shift;
-	
+
 	my $printable_bytes_read = printable_bytes ($total_bytes_read);
 
 	# process @rate_history to get 5m, 1m, 10s, and most-recent average rates
@@ -161,8 +162,8 @@ sub display_progress {
 		# transfers that happened in the last five minutes
 		if ($age <= 60*5) { push (@five_minute_rate,$rate); ;}
 		# remove any rows older than five minutes
-		if ($age > 5*60) { 
-			splice (@{$rate_history_reference}, $index); 
+		if ($age > 5*60) {
+			splice (@{$rate_history_reference}, $index);
 		}
 	}
 
@@ -201,7 +202,7 @@ sub display_progress {
 		$estimated_time_remaining = $remaining_data / $transfer_rate;
 		$display_estimated_time_remaining = printable_seconds($estimated_time_remaining);
 	}
-	
+
 	# now build the meter output
 	my $message = "  [" . $display_source_size . "]";
 	$message .= " [AVG $printable_aggregate_mean CUR $printable_current_rate" . "] [";
@@ -222,12 +223,12 @@ sub display_progress {
 	my $donelength = $barlength * $percentdone;
 	my $bartext = "=" x ($donelength-1);
 	$bartext .= ">";
-	
+
 	my $emptylength = $barlength - $donelength;
 	$bartext .= " " x $emptylength;
-	
+
 	$message .= $bartext . $eta;
-	
+
 	print STDERR "$message\n";
 }
 
@@ -276,21 +277,20 @@ sub printable_bytes {
 	my $bytes = shift;
 	my $printable_bytes;
 
-        if ($bytes >= 1024*1024*1024*1024) {
-                $printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024/1024) . 'TiB';
-        } elsif ($bytes >= 1024*1024*1024) {
-                $printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024) . 'GiB';
-        } elsif ($bytes >= 1024*1024) {
-                $printable_bytes = sprintf("%.1f",$bytes/1024/1024) . 'MiB';
-        } else {
-                $printable_bytes = sprintf("%d",$bytes/1024) . 'KiB';
-        }
+	if ($bytes >= 1024*1024*1024*1024) {
+		$printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024/1024) . 'TiB';
+	} elsif ($bytes >= 1024*1024*1024) {
+		$printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024) . 'GiB';
+	} elsif ($bytes >= 1024*1024) {
+		$printable_bytes = sprintf("%.1f",$bytes/1024/1024) . 'MiB';
+	} else {
+		$printable_bytes = sprintf("%d",$bytes/1024) . 'KiB';
+	}
 
 	return $printable_bytes;
 }
 
 sub close_files {
-
 	my $SOURCE = shift;
 	my $TARGET = shift;
 
@@ -303,7 +303,6 @@ sub close_files {
 }
 
 sub open_files {
-
 	my $SOURCE = shift;
 	my $TARGET = shift;
 	my $blocksize = shift;
@@ -311,7 +310,7 @@ sub open_files {
 	# if SOURCE is a file, a -s check is all we need to find its size
 	my $size = -s $SOURCE;
 
-	if (-b $SOURCE || -c $SOURCE) { 
+	if (-b $SOURCE || -c $SOURCE) {
 		# this is a block device or character device, -s won't work
 		open TEST, "<", $SOURCE;
 		seek TEST, 0, 2;
@@ -320,13 +319,13 @@ sub open_files {
 	}
 
 	sysopen SOURCE, $SOURCE, O_RDONLY
-        	or die $! ? "Error opening source file $SOURCE: $!"
-	        : "Exit status $? from sysopen SOURCE,$SOURCE,O_RDONLY\n";
+		or die $! ? "Error opening source file $SOURCE: $!"
+		: "Exit status $? from sysopen SOURCE,$SOURCE,O_RDONLY\n";
 	binmode SOURCE;
 
 	open TARGET, ">", "$TARGET"
-        	or die $! ? "Error opening target file $TARGET: $!"
-	        : "Exit status $? from open TARGET,>,$TARGET\n";
+		or die $! ? "Error opening target file $TARGET: $!"
+		: "Exit status $? from open TARGET,>,$TARGET\n";
 	binmode TARGET;
 
 	return $size;
