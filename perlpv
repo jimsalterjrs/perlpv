@@ -1,7 +1,11 @@
 #!/usr/bin/env perl
 
+use strict;
+use warnings;
+
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC alarm);
-use Errno (EINTR);
+use Errno qw(EINTR);
+use Fcntl qw(O_RDONLY);
 
 # We need to turn off buffering of STDOUT to get rapid display of progress.
 STDOUT->autoflush(1);
@@ -19,7 +23,7 @@ my $TARGET = $ARGV[1];
 #                                 does appear SLIGHTLY faster, at least for the inital couple of seconds, than using 64KiB.
 my $blocksize = 1024 * 512;
 
-my $begin = monotime;
+my $begin = monotime();
 
 	my $size = open_files($SOURCE, $TARGET, $blocksize);
 
@@ -27,7 +31,7 @@ my $begin = monotime;
 
 	close_files($SOURCE, $TARGET);
 
-my $end = monotime;
+my $end = monotime();
 
 exit 0;
 
@@ -43,8 +47,7 @@ sub transfer_data {
 	my $returncode = -1;
 
 	my $total_bytes_read=0;
-	my $begin = monotime;
-	my $last_printed = monotime;
+	my $begin = monotime();
 
 	# We need to keep a running tally of point-in-time transfer rates for improved accuracy
 	# in progress bar completion estimates.
@@ -65,7 +68,7 @@ sub transfer_data {
 	# dump a clean newline in at the start, so we don't erase existing stuff in the terminal
 	print "\n";
 
-	my $timestamp_before_reading = monotime;
+	my $timestamp_before_reading = monotime();
 	my $current_bytes_read = 0;
 	my $buffer_pending_bytes = 0;
 	my $buffer = '';
@@ -102,7 +105,7 @@ sub transfer_data {
 		}
 
 		if ($alarmed || $returncode eq 0) {
-			my $timestamp_after_writing = monotime;
+			my $timestamp_after_writing = monotime();
 
 			$total_bytes_read += $current_bytes_read;
 			# calculate transfer rate of this block
@@ -117,7 +120,7 @@ sub transfer_data {
 			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history,$final_progress_update);
 
 			$alarmed = 0;
-			$timestamp_before_reading = monotime;
+			$timestamp_before_reading = monotime();
 			$current_bytes_read = 0;
 		}
 	}
@@ -125,8 +128,8 @@ sub transfer_data {
 	alarm(0);
 	$final_progress_update = 1;
 
-	# don't use monotime directly in an equation. assign it to a variable first or you will NOT get coherent results.
-	my $end = monotime;
+	# don't use monotime() directly in an equation. assign it to a variable first or you will NOT get coherent results.
+	my $end = monotime();
 	my $time_elapsed = $end - $begin;
 	display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history,$final_progress_update);
 }
@@ -144,7 +147,7 @@ sub display_progress {
 	my @five_minute_rate;
 	my @one_minute_rate;
 	my @ten_second_rate;
-	my $now = monotime;
+	my $now = monotime();
 
 	for my $index (reverse 0 .. (scalar(@{$rate_history_reference})-1) ) {
 		my $row = ${$rate_history_reference}[$index];
@@ -177,9 +180,9 @@ sub display_progress {
 
 	# average our four rates to get a final guesstimated rate
 	my @non_null_rates;
-	if ($#five_minute_mean) { push (@non_null_rates,$five_minute_mean); }
-	if ($#one_minute_mean) { push (@non_null_rates,$one_minute_mean); }
-	if ($#ten_second_mean) { push (@non_null_rates,$ten_second_mean); }
+	if ($five_minute_mean) { push (@non_null_rates,$five_minute_mean); }
+	if ($one_minute_mean) { push (@non_null_rates,$one_minute_mean); }
+	if ($ten_second_mean) { push (@non_null_rates,$ten_second_mean); }
 	if ($current_rate) { push (@non_null_rates,$current_rate); }
 	my $transfer_rate = average_array (@non_null_rates);
 	my $display_transfer_rate = printable_bytes ($transfer_rate) . "/sec";
@@ -190,11 +193,11 @@ sub display_progress {
 	# clear last status line before printing a new one
 	print STDERR $clearline;
 
-	my $display_source_size;
+	my $display_source_size = '';
 	if ($source_size) { $display_source_size = " of " . printable_bytes ($source_size); }
 
 	my $estimated_time_remaining;
-	my $display_estimated_time_remaining;
+	my $display_estimated_time_remaining = '';
 
 	if ($source_size && $remaining_data && $transfer_rate) {
 		$estimated_time_remaining = $remaining_data / $transfer_rate;
@@ -206,7 +209,6 @@ sub display_progress {
 	} else {
 		print STDERR "    Transferred $printable_bytes_read" . $display_source_size . " (AVG $printable_aggregate_mean CUR $printable_current_rate)" . $display_estimated_time_remaining . "\n";
 	}
-	$last_printed = monotime;
 }
 
 sub average_array {
@@ -221,9 +223,9 @@ sub printable_seconds {
 	my $seconds = shift;
 	my $printable_seconds;
 
-	my $days;
-	my $hours;
-	my $minutes;
+	my $days = 0;
+	my $hours = 0;
+	my $minutes = 0;
 
 	if ($seconds >= 60*60*24) {
 		$days = sprintf("%d",$seconds/60/60/24);
@@ -297,7 +299,7 @@ sub open_files {
 		close TEST;
 	}
 
-	sysopen SOURCE, $SOURCE, "O_RDONLY"
+	sysopen SOURCE, $SOURCE, O_RDONLY
         	or die $! ? "Error opening source file $SOURCE: $!"
 	        : "Exit status $? from sysopen SOURCE,$SOURCE,O_RDONLY\n";
 	binmode SOURCE;
