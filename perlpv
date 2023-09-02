@@ -204,7 +204,8 @@ sub display_progress {
 	}
 
 	# now build the meter output
-	my $message = "  [" . $display_source_size . "]";
+	my $printable_time_elapsed = printable_seconds($time_elapsed);
+	my $message = "  $printable_time_elapsed [" . $display_source_size . "]";
 	$message .= " [AVG $printable_aggregate_mean CUR $printable_current_rate" . "] [";
 
 	my $eta = "]              ";
@@ -220,8 +221,8 @@ sub display_progress {
 
 	# build the bar
 	my $percentdone = ($source_size - $remaining_data) / $source_size;
-	my $donelength = $barlength * $percentdone;
-	my $bartext = "=" x ($donelength-1);
+	my $donelength = int($barlength * $percentdone);
+	my $bartext = "=" x $donelength;
 	$bartext .= ">";
 
 	my $emptylength = $barlength - $donelength;
