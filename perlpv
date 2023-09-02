@@ -45,96 +45,92 @@ sub monotime {
 sub transfer_data {
 	my $source_size = shift;
 
-	# perl sysread returns a value equal to the number of bytes read, or 0 if it's past EOF.
-	# -1 is used to indicate timeout here
-	my $returncode = -1;
-
-	my $total_bytes_read=0;
-	my $begin = monotime();
-
 	# We need to keep a running tally of point-in-time transfer rates for improved accuracy
 	# in progress bar completion estimates.
 	my @rate_history;
 
-	# We need to handle the final displayed progress update slightly differently at the end.
-	my $final_progress_update = 0;
-
+	my $finished = 0;
 	my $alarmed = 0;
 
-	# Set up an alarm timer
+	# Set up a SIGALRM timer to interrupt us periodically to update statistics
 	local $SIG{'ALRM'} = sub {
 		$alarmed = 1;
 	};
 
 	alarm(0.5, 0.5);
 
+	# Number of bytes from the previous read, 0 at EOF, or -1 on SIGALRM interrupt
+	my $bytes_read = -1;
+
+	# Total of this file, and since the last stats update
+	my $total_bytes_read = 0;
+	my $current_bytes_read = 0;
+
+	# Bytes in buffer remaining to write
+	my $buffer_pending_bytes = 0;
+	my $buffer;
+
+	my $begin = monotime();
+	my $timestamp_before_reading = $begin;
+
 	# dump a clean newline in at the start, so we don't erase existing stuff in the terminal
 	print "\n";
 
-	my $timestamp_before_reading = monotime();
-	my $current_bytes_read = 0;
-	my $buffer_pending_bytes = 0;
-	my $buffer = '';
-
-	while ($returncode ne 0 || $buffer_pending_bytes ne 0) {
-		if ($buffer_pending_bytes eq 0) {
+	# Loop until we have both exhausted the input and cleared the output buffer
+	until ($finished) {
+		# Try reading if the buffer is empty and we haven't previously hit EOF
+		if ($buffer_pending_bytes == 0 && $bytes_read != 0) {
+			# Try to refill our empty buffer
 			$buffer = '';
-			$returncode = sysread(SOURCE, $buffer, $blocksize);
+			$bytes_read = sysread(SOURCE, $buffer, $blocksize);
 
-			unless (defined($returncode)) {
-				die "Error reading from $SOURCE: $!" unless $!{EINTR};
-				$returncode = -1;
-			}
-
-			if ($returncode > 0) {
-				$current_bytes_read += $returncode;
-				$buffer_pending_bytes = $returncode;
+			if (defined($bytes_read)) {
+				$current_bytes_read += $bytes_read;
+				$buffer_pending_bytes = $bytes_read;
+			} elsif ($! == EINTR) {
+				$bytes_read = -1;
+			} else {
+				die "Error reading from $SOURCE: $!";
 			}
 		}
 
-		if ($buffer_pending_bytes ne 0) {
-			my $written = syswrite(TARGET, $buffer, $buffer_pending_bytes,
+		if ($buffer_pending_bytes != 0) {
+			# Try to drain the non-empty buffer
+			my $bytes_written = syswrite(TARGET, $buffer, $buffer_pending_bytes,
 				length($buffer) - $buffer_pending_bytes);
 
-			unless (defined($written)) {
-				die $! ? "Error writing to $TARGET: $!" : "Exit status $? from $TARGET"
-					unless $!{EINTR};
-				$written = -1;
-			}
-
-			if ($written > 0) {
-				$buffer_pending_bytes -= $written;
+			if (defined($bytes_written)) {
+				$buffer_pending_bytes -= $bytes_written;
+			} elsif ($! != EINTR) {
+				die $! ? "Error writing to $TARGET: $!" : "Exit status $? from $TARGET";
 			}
 		}
 
-		if ($alarmed || $returncode eq 0) {
+		$finished = $bytes_read == 0 && $buffer_pending_bytes == 0;
+
+		# Record stats if we've received SIGALRM or have hit EOF and finished writing
+		if ($alarmed || $finished) {
 			my $timestamp_after_writing = monotime();
 
 			$total_bytes_read += $current_bytes_read;
-			# calculate transfer rate of this block
+			# calculate transfer rate of this interval
 			my $current_time_elapsed = $timestamp_after_writing - $timestamp_before_reading;
-			if ($current_time_elapsed eq 0) { $current_time_elapsed = 1; }
+			if ($current_time_elapsed == 0) { $current_time_elapsed = 1; }
 			my $instantaneous_transfer_rate = ( $current_bytes_read / $current_time_elapsed );
 
-			push (@rate_history,"$timestamp_after_writing,$instantaneous_transfer_rate");
+			push (@rate_history, "$timestamp_after_writing,$instantaneous_transfer_rate");
 
 			my $time_elapsed = $timestamp_after_writing - $begin;
 
-			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history,$final_progress_update);
+			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history, $finished);
 
 			$alarmed = 0;
-			$timestamp_before_reading = monotime();
+			$timestamp_before_reading = $timestamp_after_writing;
 			$current_bytes_read = 0;
 		}
 	}
 
 	alarm(0);
-	$final_progress_update = 1;
-
-	# don't use monotime() directly in an equation. assign it to a variable first or you will NOT get coherent results.
-	my $end = monotime();
-	my $time_elapsed = $end - $begin;
-	display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history,$final_progress_update);
 }
 
 sub display_progress {
