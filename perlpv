@@ -174,12 +174,12 @@ sub display_progress {
 	my $rate_history_elements = scalar (@{$rate_history_reference});
 	my $current_row = ${$rate_history_reference}[$rate_history_elements-1];
 	my ($current_time,$current_rate) = split (/,/,$current_row);
-	
+
 	# average our four rates to get a final guesstimated rate
 	my @non_null_rates;
 	if ($#five_minute_mean) { push (@non_null_rates,$five_minute_mean); }
-	if ($#one_minute_mean) { push (@non_null_rates,$five_minute_mean); }
-	if ($#ten_second_mean) { push (@non_null_rates,$five_minute_mean); }
+	if ($#one_minute_mean) { push (@non_null_rates,$one_minute_mean); }
+	if ($#ten_second_mean) { push (@non_null_rates,$ten_second_mean); }
 	if ($current_rate) { push (@non_null_rates,$current_rate); }
 	my $transfer_rate = average_array (@non_null_rates);
 	my $display_transfer_rate = printable_bytes ($transfer_rate) . "/sec";
