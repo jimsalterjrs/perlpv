@@ -22,8 +22,9 @@ my $clearline = $beginline . $cursorup . $cleartoend;
 my $SOURCE = $ARGV[0];
 my $TARGET = $ARGV[1];
 
-# Set transfer blocksize to 512KiB. This doesn't appear to affect transfer rate MUCH, at least on my (i9-12900K) system. But it 
-#                                 does appear SLIGHTLY faster, at least for the inital couple of seconds, than using 64KiB.
+# Set transfer blocksize to 512KiB. This doesn't appear to affect transfer rate MUCH, at least on my
+# (i9-12900K) system. But it does appear SLIGHTLY faster, at least for the inital couple of seconds,
+# than using 64KiB.
 my $blocksize = 1024 * 512;
 
 my $begin = monotime();
@@ -45,96 +46,92 @@ sub monotime {
 sub transfer_data {
 	my $source_size = shift;
 
-	# perl sysread returns a value equal to the number of bytes read, or 0 if it's past EOF.
-	# -1 is used to indicate timeout here
-	my $returncode = -1;
-
-	my $total_bytes_read=0;
-	my $begin = monotime();
-
 	# We need to keep a running tally of point-in-time transfer rates for improved accuracy
 	# in progress bar completion estimates.
 	my @rate_history;
 
-	# We need to handle the final displayed progress update slightly differently at the end.
-	my $final_progress_update = 0;
-
+	my $finished = 0;
 	my $alarmed = 0;
 
-	# Set up an alarm timer
+	# Set up a SIGALRM timer to interrupt us periodically to update statistics
 	local $SIG{'ALRM'} = sub {
 		$alarmed = 1;
 	};
 
 	alarm(0.5, 0.5);
 
+	# Number of bytes from the previous read, 0 at EOF, or -1 on SIGALRM interrupt
+	my $bytes_read = -1;
+
+	# Total of this file, and since the last stats update
+	my $total_bytes_read = 0;
+	my $current_bytes_read = 0;
+
+	# Bytes in buffer remaining to write
+	my $buffer_pending_bytes = 0;
+	my $buffer;
+
+	my $begin = monotime();
+	my $timestamp_before_reading = $begin;
+
 	# dump a clean newline in at the start, so we don't erase existing stuff in the terminal
 	print "\n";
 
-	my $timestamp_before_reading = monotime();
-	my $current_bytes_read = 0;
-	my $buffer_pending_bytes = 0;
-	my $buffer = '';
-
-	while ($returncode ne 0 || $buffer_pending_bytes ne 0) {
-		if ($buffer_pending_bytes eq 0) {
+	# Loop until we have both exhausted the input and cleared the output buffer
+	until ($finished) {
+		# Try reading if the buffer is empty and we haven't previously hit EOF
+		if ($buffer_pending_bytes == 0 && $bytes_read != 0) {
+			# Try to refill our empty buffer
 			$buffer = '';
-			$returncode = sysread(SOURCE, $buffer, $blocksize);
+			$bytes_read = sysread(SOURCE, $buffer, $blocksize);
 
-			unless (defined($returncode)) {
-				die "Error reading from $SOURCE: $!" unless $!{EINTR};
-				$returncode = -1;
-			}
-
-			if ($returncode > 0) {
-				$current_bytes_read += $returncode;
-				$buffer_pending_bytes = $returncode;
+			if (defined($bytes_read)) {
+				$current_bytes_read += $bytes_read;
+				$buffer_pending_bytes = $bytes_read;
+			} elsif ($! == EINTR) {
+				$bytes_read = -1;
+			} else {
+				die "Error reading from $SOURCE: $!";
 			}
 		}
 
-		if ($buffer_pending_bytes ne 0) {
-			my $written = syswrite(TARGET, $buffer, $buffer_pending_bytes,
+		if ($buffer_pending_bytes != 0) {
+			# Try to drain the non-empty buffer
+			my $bytes_written = syswrite(TARGET, $buffer, $buffer_pending_bytes,
 				length($buffer) - $buffer_pending_bytes);
 
-			unless (defined($written)) {
-				die $! ? "Error writing to $TARGET: $!" : "Exit status $? from $TARGET"
-					unless $!{EINTR};
-				$written = -1;
-			}
-
-			if ($written > 0) {
-				$buffer_pending_bytes -= $written;
+			if (defined($bytes_written)) {
+				$buffer_pending_bytes -= $bytes_written;
+			} elsif ($! != EINTR) {
+				die $! ? "Error writing to $TARGET: $!" : "Exit status $? from $TARGET";
 			}
 		}
 
-		if ($alarmed || $returncode eq 0) {
+		$finished = $bytes_read == 0 && $buffer_pending_bytes == 0;
+
+		# Record stats if we've received SIGALRM or have hit EOF and finished writing
+		if ($alarmed || $finished) {
 			my $timestamp_after_writing = monotime();
 
 			$total_bytes_read += $current_bytes_read;
-			# calculate transfer rate of this block
+			# calculate transfer rate of this interval
 			my $current_time_elapsed = $timestamp_after_writing - $timestamp_before_reading;
-			if ($current_time_elapsed eq 0) { $current_time_elapsed = 1; }
+			if ($current_time_elapsed == 0) { $current_time_elapsed = 1; }
 			my $instantaneous_transfer_rate = ( $current_bytes_read / $current_time_elapsed );
 
-			push (@rate_history,"$timestamp_after_writing,$instantaneous_transfer_rate");
+			push (@rate_history, "$timestamp_after_writing,$instantaneous_transfer_rate");
 
 			my $time_elapsed = $timestamp_after_writing - $begin;
 
-			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history,$final_progress_update);
+			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history, $finished);
 
 			$alarmed = 0;
-			$timestamp_before_reading = monotime();
+			$timestamp_before_reading = $timestamp_after_writing;
 			$current_bytes_read = 0;
 		}
 	}
 
 	alarm(0);
-	$final_progress_update = 1;
-
-	# don't use monotime() directly in an equation. assign it to a variable first or you will NOT get coherent results.
-	my $end = monotime();
-	my $time_elapsed = $end - $begin;
-	display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history,$final_progress_update);
 }
 
 sub display_progress {
@@ -143,7 +140,7 @@ sub display_progress {
 	my $time_elapsed = shift;
 	my $rate_history_reference = shift;
 	my $final_progress_update = shift;
-	
+
 	my $printable_bytes_read = printable_bytes ($total_bytes_read);
 
 	# process @rate_history to get 5m, 1m, 10s, and most-recent average rates
@@ -165,8 +162,8 @@ sub display_progress {
 		# transfers that happened in the last five minutes
 		if ($age <= 60*5) { push (@five_minute_rate,$rate); ;}
 		# remove any rows older than five minutes
-		if ($age > 5*60) { 
-			splice (@{$rate_history_reference}, $index); 
+		if ($age > 5*60) {
+			splice (@{$rate_history_reference}, $index);
 		}
 	}
 
@@ -205,7 +202,7 @@ sub display_progress {
 		$estimated_time_remaining = $remaining_data / $transfer_rate;
 		$display_estimated_time_remaining = printable_seconds($estimated_time_remaining);
 	}
-	
+
 	# now build the meter output
 	my $message = "  [" . $display_source_size . "]";
 	$message .= " [AVG $printable_aggregate_mean CUR $printable_current_rate" . "] [";
@@ -226,12 +223,12 @@ sub display_progress {
 	my $donelength = $barlength * $percentdone;
 	my $bartext = "=" x ($donelength-1);
 	$bartext .= ">";
-	
+
 	my $emptylength = $barlength - $donelength;
 	$bartext .= " " x $emptylength;
-	
+
 	$message .= $bartext . $eta;
-	
+
 	print STDERR "$message\n";
 }
 
@@ -280,21 +277,20 @@ sub printable_bytes {
 	my $bytes = shift;
 	my $printable_bytes;
 
-        if ($bytes >= 1024*1024*1024*1024) {
-                $printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024/1024) . 'TiB';
-        } elsif ($bytes >= 1024*1024*1024) {
-                $printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024) . 'GiB';
-        } elsif ($bytes >= 1024*1024) {
-                $printable_bytes = sprintf("%.1f",$bytes/1024/1024) . 'MiB';
-        } else {
-                $printable_bytes = sprintf("%d",$bytes/1024) . 'KiB';
-        }
+	if ($bytes >= 1024*1024*1024*1024) {
+		$printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024/1024) . 'TiB';
+	} elsif ($bytes >= 1024*1024*1024) {
+		$printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024) . 'GiB';
+	} elsif ($bytes >= 1024*1024) {
+		$printable_bytes = sprintf("%.1f",$bytes/1024/1024) . 'MiB';
+	} else {
+		$printable_bytes = sprintf("%d",$bytes/1024) . 'KiB';
+	}
 
 	return $printable_bytes;
 }
 
 sub close_files {
-
 	my $SOURCE = shift;
 	my $TARGET = shift;
 
@@ -307,7 +303,6 @@ sub close_files {
 }
 
 sub open_files {
-
 	my $SOURCE = shift;
 	my $TARGET = shift;
 	my $blocksize = shift;
@@ -315,7 +310,7 @@ sub open_files {
 	# if SOURCE is a file, a -s check is all we need to find its size
 	my $size = -s $SOURCE;
 
-	if (-b $SOURCE || -c $SOURCE) { 
+	if (-b $SOURCE || -c $SOURCE) {
 		# this is a block device or character device, -s won't work
 		open TEST, "<", $SOURCE;
 		seek TEST, 0, 2;
@@ -324,13 +319,13 @@ sub open_files {
 	}
 
 	sysopen SOURCE, $SOURCE, O_RDONLY
-        	or die $! ? "Error opening source file $SOURCE: $!"
-	        : "Exit status $? from sysopen SOURCE,$SOURCE,O_RDONLY\n";
+		or die $! ? "Error opening source file $SOURCE: $!"
+		: "Exit status $? from sysopen SOURCE,$SOURCE,O_RDONLY\n";
 	binmode SOURCE;
 
 	open TARGET, ">", "$TARGET"
-        	or die $! ? "Error opening target file $TARGET: $!"
-	        : "Exit status $? from open TARGET,>,$TARGET\n";
+		or die $! ? "Error opening target file $TARGET: $!"
+		: "Exit status $? from open TARGET,>,$TARGET\n";
 	binmode TARGET;
 
 	return $size;
