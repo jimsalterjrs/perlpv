@@ -206,11 +206,30 @@ sub display_progress {
 		$display_estimated_time_remaining = printable_seconds($estimated_time_remaining);
 	}
 	
-	# now actually output the meter
-	print STDERR "  [" . $display_source_size . "]";
-	print STDERR " [AVG $printable_aggregate_mean CUR $printable_current_rate" . "]";
-	if ($estimated_time_remaining) { print STDERR " ETA $display_estimated_time_remaining"; }
-	print STDERR " \n";
+	# now build the meter output
+	my $message = "  [" . $display_source_size . "]";
+	$message .= " [AVG $printable_aggregate_mean CUR $printable_current_rate" . "] [";
+
+	my $eta = "]             ";;
+	if ($estimated_time_remaining) { $eta = "] ETA $display_estimated_time_remaining"; }
+	my $messagelength = length ($message) + length ($eta);
+
+	# find terminal length, extrapolate bar length
+	my ($wchar, $hcar, $wpixels, $hpixels) = GetTerminalSize();
+	my $barlength = $wchar - $messagelength;
+
+	# build the bar
+	my $percentdone = ($source_size - $remaining_data) / $source_size;
+	my $donelength = $barlength * $percentdone;
+	my $bartext = "=" x ($donelength-1);
+	$bartext .= ">";
+	
+	my $emptylength = $barlength - $donelength;
+	$bartext .= " " x $emptylength;
+	
+	$message .= $bartext . $eta;
+	
+	print STDERR "$message";
 }
 
 sub average_array {
