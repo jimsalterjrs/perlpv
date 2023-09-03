@@ -2,6 +2,7 @@
 
 use strict;
 use warnings;
+use utf8;
 
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC alarm);
 use Errno qw(EINTR);
@@ -11,7 +12,10 @@ use Fcntl qw(O_RDONLY);
 use Term::ReadKey;
 
 # We need to turn off buffering of STDOUT to get rapid display of progress.
+# ... we're mostly printing to STDERR?
 STDOUT->autoflush(1);
+STDERR->autoflush(1);
+binmode(STDERR, ":encoding(UTF-8)");
 
 my $cursorup = "\033[1A";
 my $cursordown = "\033[1B";
@@ -239,12 +243,13 @@ sub display_progress {
 
 	# the part we've done
 	my $bartext = "[";
-	$bartext .= "=" x $donelength;
-	$bartext .= ">";
+	$bartext .= progress_bar($barlength, "   ▏▎▍▌▋▊▉█", $percentdone);
+	# $bartext .= "=" x $donelength;
+	# $bartext .= ">";
 
 	# the part we haven't done yet
-	my $emptylength = $barlength - $donelength;
-	$bartext .= " " x $emptylength;
+	# my $emptylength = $barlength - $donelength;
+	# $bartext .= " " x $emptylength;
 	$bartext .= "]";
 
 	$message .= "$bartext $eta";
@@ -384,4 +389,25 @@ sub open_files {
 	binmode TARGET;
 
 	return $size;
+}
+
+sub progress_bar {
+	my $width = shift;
+	my $chars = shift;
+	my $pos = shift;
+
+	my $bgch = substr($chars, 0, 1);
+	my $fillch = substr($chars, -1, 1);
+	my $intermediates = substr($chars, 1, -1);
+	my $steps = (length($chars) - 2) * $width;
+	$steps ||= $width;
+
+	my $fill = int($width * $pos);
+	my $bar = $fillch x $fill;
+
+	if ($intermediates && $fill < $width) {
+		$bar .= substr($intermediates, ($steps * $pos) % length($intermediates), 1);
+	}
+
+	$bar . ($bgch x ($width - length($bar)))
 }
