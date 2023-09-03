@@ -222,7 +222,8 @@ sub display_progress {
 	my $barlength = $wchar - $messagelength - 2;
 
 	# build the bar
-	my $percentdone = ($source_size - $remaining_data) / $source_size;
+	my $percentdone = 0;
+	if ($source_size) { $percentdone = ($source_size - $remaining_data) / $source_size; }
 	my $donelength = int($barlength * $percentdone);
 	my $bartext = "=" x $donelength;
 	$bartext .= ">";
