@@ -219,7 +219,7 @@ sub display_progress {
 
 	# now build the meter output
 	my $printable_time_elapsed = printable_seconds($time_elapsed);
-	my $message = "  $printable_time_elapsed [" . $display_source_size . "]";
+	my $message = "  $printable_time_elapsed [" . ($source_size ? $display_source_size : $printable_bytes_read) . "]";
 	$message .= " [AVG $printable_aggregate_mean ";
 	# check to make sure there's room to display both rates, drop CUR if necessary
 	if ($wchar >= 75) { $message .= "CUR $printable_current_rate"; }
