@@ -56,6 +56,7 @@ sub transfer_data {
 
 	my $finished = 0;
 	my $alarmed = 0;
+	my $stat_iteration = 0;
 
 	# Set up a SIGALRM timer to interrupt us periodically to update statistics
 	local $SIG{'ALRM'} = sub {
@@ -128,11 +129,12 @@ sub transfer_data {
 
 			my $time_elapsed = $timestamp_after_writing - $begin;
 
-			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history);
+			display_progress ($total_bytes_read, $source_size, $time_elapsed, $stat_iteration, \@rate_history);
 
 			$alarmed = 0;
 			$timestamp_before_reading = $timestamp_after_writing;
 			$current_bytes_read = 0;
+			$stat_iteration++;
 		}
 	}
 	print STDERR "\n";
@@ -143,6 +145,7 @@ sub display_progress {
 	my $total_bytes_read = shift;
 	my $source_size = shift;
 	my $time_elapsed = shift;
+	my $iteration = shift;
 	my $rate_history_reference = shift;
 
 	my $printable_bytes_read = printable_bytes ($total_bytes_read);
@@ -243,7 +246,14 @@ sub display_progress {
 
 	# the part we've done
 	my $bartext = "[";
-	$bartext .= progress_bar($barlength, "   ▏▎▍▌▋▊▉█", $percentdone);
+	if ($source_size) {
+		$bartext .= progress_bar($barlength, "   ▏▎▍▌▋▊▉█", $percentdone);
+	}
+	else {
+		my @spinner = ("-    ", " -   ", "  -  ", "   - ", "    -", "   - ", "  -  ", " -   ");
+		$bartext .= $spinner[$iteration % ($#spinner + 1)];
+		# $bartext .= spinner(("-", "\\", "|", "/", "-", " -", " /", " |", " \\", " -"), $iteration);
+	}
 	# $bartext .= "=" x $donelength;
 	# $bartext .= ">";
 
