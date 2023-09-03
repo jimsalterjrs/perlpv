@@ -113,7 +113,7 @@ sub transfer_data {
 		if ($alarmed || $finished) {
 			my $timestamp_after_writing = monotime();
 
-			$total_bytes_read += $current_bytes_read;
+			if (!$finished) { $total_bytes_read += $current_bytes_read; }
 			# calculate transfer rate of this interval
 			my $current_time_elapsed = $timestamp_after_writing - $timestamp_before_reading;
 			if ($current_time_elapsed == 0) { $current_time_elapsed = 1; }
@@ -206,32 +206,47 @@ sub display_progress {
 	my ($wchar, $hcar, $wpixels, $hpixels) = GetTerminalSize();
 	# no more ridiculously over-long meters please
 	if ($wchar > 80) { $wchar = 80; }
+	# leave one extra character so we can print a \n to keep things cleaner if user resizes the term
+	$wchar --;
 
 	# now build the meter output
 	my $printable_time_elapsed = printable_seconds($time_elapsed);
 	my $message = "  $printable_time_elapsed [" . $display_source_size . "]";
 	$message .= " [AVG $printable_aggregate_mean ";
 	# check to make sure there's room to display both rates, drop CUR if necessary
-	if ($wchar >= 75) { $message .= "CUR $printable_current_rate" . "] ["; } else { $message.= "] ["; }
+	if ($wchar >= 75) { $message .= "CUR $printable_current_rate"; } 
+	$message.= "]"; 
 
-	my $eta = "]             ";
-	if ($estimated_time_remaining) { $eta = "] ETA $display_estimated_time_remaining"; }
-	my $messagelength = length ($message) + length ($eta);
-
+	my $eta = "ETA ";
+	if ($estimated_time_remaining) { 
+		$eta .= $display_estimated_time_remaining; 
+	} else {
+		$eta .= "??:??:??";
+	}
+	
 	# leave one extra character for an explicit \n, avoids some mess if the terminal is resized during the run
-	my $barlength = $wchar - $messagelength - 2;
+	my $messagelength = length ($message) + length ($eta) ;
+	my $barlength = $wchar - $messagelength -2 ;
 
 	# build the bar
 	my $percentdone = 0;
-	if ($source_size) { $percentdone = ($source_size - $remaining_data) / $source_size; }
-	my $donelength = int($barlength * $percentdone);
-	my $bartext = "=" x $donelength;
+	if ($source_size) { $percentdone = ($source_size - $remaining_data) / $source_size ; }
+	my $donelength = $barlength * $percentdone;
+
+	# round, don't truncate
+	# $donelength = sprintf("%0f", $donelength);
+
+	# the part we've done
+	my $bartext = "[";
+	$bartext .= "=" x $donelength;
 	$bartext .= ">";
 
+	# the part we haven't done yet
 	my $emptylength = $barlength - $donelength;
 	$bartext .= " " x $emptylength;
+	$bartext .= "]";
 
-	$message .= $bartext . $eta;
+	$message .= "$bartext $eta";
 
 	print STDERR "$message";
 }
