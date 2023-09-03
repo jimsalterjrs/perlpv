@@ -123,7 +123,7 @@ sub transfer_data {
 
 			my $time_elapsed = $timestamp_after_writing - $begin;
 
-			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history, $finished);
+			display_progress ($total_bytes_read, $source_size, $time_elapsed, \@rate_history);
 
 			$alarmed = 0;
 			$timestamp_before_reading = $timestamp_after_writing;
@@ -139,7 +139,6 @@ sub display_progress {
 	my $source_size = shift;
 	my $time_elapsed = shift;
 	my $rate_history_reference = shift;
-	my $final_progress_update = shift;
 
 	my $printable_bytes_read = printable_bytes ($total_bytes_read);
 
@@ -208,7 +207,7 @@ sub display_progress {
 	my $message = "  $printable_time_elapsed [" . $display_source_size . "]";
 	$message .= " [AVG $printable_aggregate_mean CUR $printable_current_rate" . "] [";
 
-	my $eta = "]              ";
+	my $eta = "]             ";
 	if ($estimated_time_remaining) { $eta = "] ETA $display_estimated_time_remaining"; }
 	my $messagelength = length ($message) + length ($eta);
 
