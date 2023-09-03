@@ -113,7 +113,8 @@ sub transfer_data {
 		if ($alarmed || $finished) {
 			my $timestamp_after_writing = monotime();
 
-			if (!$finished) { $total_bytes_read += $current_bytes_read; }
+			# if (!$finished) { $total_bytes_read += $current_bytes_read; }
+			$total_bytes_read += $current_bytes_read;
 			# calculate transfer rate of this interval
 			my $current_time_elapsed = $timestamp_after_writing - $timestamp_before_reading;
 			if ($current_time_elapsed == 0) { $current_time_elapsed = 1; }
@@ -214,16 +215,16 @@ sub display_progress {
 	my $message = "  $printable_time_elapsed [" . $display_source_size . "]";
 	$message .= " [AVG $printable_aggregate_mean ";
 	# check to make sure there's room to display both rates, drop CUR if necessary
-	if ($wchar >= 75) { $message .= "CUR $printable_current_rate"; } 
-	$message.= "]"; 
+	if ($wchar >= 75) { $message .= "CUR $printable_current_rate"; }
+	$message.= "]";
 
 	my $eta = "ETA ";
-	if ($estimated_time_remaining) { 
-		$eta .= $display_estimated_time_remaining; 
+	if ($estimated_time_remaining) {
+		$eta .= $display_estimated_time_remaining;
 	} else {
 		$eta .= "??:??:??";
 	}
-	
+
 	# leave one extra character for an explicit \n, avoids some mess if the terminal is resized during the run
 	my $messagelength = length ($message) + length ($eta) ;
 	my $barlength = $wchar - $messagelength -2 ;
@@ -292,7 +293,42 @@ sub printable_seconds {
 	return $printable_seconds;
 }
 
+# ZFS-style number formatting
+# Takes a byte size and a character length to fit the formatted value within
 sub printable_bytes {
+	my $num = shift;
+	my $length = shift || 5;
+	$length--;
+
+	my @size_prefix = ('', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y');
+	my @formats = ("%${length}.2f%s", "%${length}.1f%s", "%${length}.0f%s");
+	my $divisor = 1024;
+
+	my $n = $num;
+	my $index = 0;
+	while ($n >= $divisor && $index <= ($#size_prefix - 1)) {
+		$n /= $divisor;
+		$index++;
+	}
+
+	my $u = $size_prefix[$index];
+
+	if ($index == 0 || $num % ($divisor ** $index) == 0) {
+		return sprintf("%${length}d%s", $n, $u);
+	}
+
+	$length++;
+	my $ret;
+	foreach my $fmt (@formats) {
+		$ret = sprintf($fmt, $n, $u);
+		if (length($ret) <= $length) {
+			return $ret;
+		}
+	}
+	return $ret;
+}
+
+sub printable_bytesx {
 	my $bytes = shift;
 	my $printable_bytes;
 
