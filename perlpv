@@ -130,7 +130,7 @@ sub transfer_data {
 			$current_bytes_read = 0;
 		}
 	}
-
+	print STDERR "\n";
 	alarm(0);
 }
 
@@ -202,21 +202,24 @@ sub display_progress {
 		$display_estimated_time_remaining = printable_seconds($estimated_time_remaining);
 	}
 
+	# find terminal length, extrapolate bar length
+	my ($wchar, $hcar, $wpixels, $hpixels) = GetTerminalSize();
+	# no more ridiculously over-long meters please
+	if ($wchar > 80) { $wchar = 80; }
+
 	# now build the meter output
 	my $printable_time_elapsed = printable_seconds($time_elapsed);
 	my $message = "  $printable_time_elapsed [" . $display_source_size . "]";
-	$message .= " [AVG $printable_aggregate_mean CUR $printable_current_rate" . "] [";
+	$message .= " [AVG $printable_aggregate_mean ";
+	# check to make sure there's room to display both rates, drop CUR if necessary
+	if ($wchar >= 75) { $message .= "CUR $printable_current_rate" . "] ["; } else { $message.= "] ["; }
 
 	my $eta = "]             ";
 	if ($estimated_time_remaining) { $eta = "] ETA $display_estimated_time_remaining"; }
 	my $messagelength = length ($message) + length ($eta);
 
-	# find terminal length, extrapolate bar length
-	my ($wchar, $hcar, $wpixels, $hpixels) = GetTerminalSize();
-	# no more ridiculously over-long meters please
-	if ($wchar > 80) { $wchar = 80; }
 	# leave one extra character for an explicit \n, avoids some mess if the terminal is resized during the run
-	my $barlength = $wchar - $messagelength - 1;
+	my $barlength = $wchar - $messagelength - 2;
 
 	# build the bar
 	my $percentdone = ($source_size - $remaining_data) / $source_size;
@@ -229,7 +232,7 @@ sub display_progress {
 
 	$message .= $bartext . $eta;
 
-	print STDERR "$message\n";
+	print STDERR "$message";
 }
 
 sub average_array {
