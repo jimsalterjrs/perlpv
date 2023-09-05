@@ -352,5 +352,5 @@ sub progress_update {
 
 	$message .= $bartext . $eta;
 
-	print STDERR "$message\n";
+	print STDERR $message;
 }
