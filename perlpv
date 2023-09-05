@@ -11,9 +11,7 @@ use Fcntl qw(O_RDONLY);
 # apt install libterm-readkey-perl on Debian derivatives eg Ubuntu
 use Term::ReadKey;
 
-# We need to turn off buffering of STDOUT to get rapid display of progress.
-# ... we're mostly printing to STDERR?
-STDOUT->autoflush(1);
+# We need to turn off buffering of STDERR to get rapid display of progress.
 STDERR->autoflush(1);
 binmode(STDERR, ":encoding(UTF-8)");
 
@@ -50,13 +48,8 @@ sub monotime {
 sub transfer_data {
 	my $source_size = shift;
 
-	# We need to keep a running tally of point-in-time transfer rates for improved accuracy
-	# in progress bar completion estimates.
-	my @rate_history;
-
 	my $finished = 0;
 	my $alarmed = 0;
-	my $stat_iteration = 0;
 
 	# Set up a SIGALRM timer to interrupt us periodically to update statistics
 	local $SIG{'ALRM'} = sub {
@@ -68,19 +61,14 @@ sub transfer_data {
 	# Number of bytes from the previous read, 0 at EOF, or -1 on SIGALRM interrupt
 	my $bytes_read = -1;
 
-	# Total of this file, and since the last stats update
-	my $total_bytes_read = 0;
+	# Total bytes read since the last progress update
 	my $current_bytes_read = 0;
 
 	# Bytes in buffer remaining to write
 	my $buffer_pending_bytes = 0;
 	my $buffer;
 
-	my $begin = monotime();
-	my $timestamp_before_reading = $begin;
-
-	# dump a clean newline in at the start, so we don't erase existing stuff in the terminal
-	print "\n";
+	my $progress = progress_init($source_size || 0);
 
 	# Loop until we have both exhausted the input and cleared the output buffer
 	until ($finished) {
@@ -116,164 +104,58 @@ sub transfer_data {
 
 		# Record stats if we've received SIGALRM or have hit EOF and finished writing
 		if ($alarmed || $finished) {
-			my $timestamp_after_writing = monotime();
-
-			# if (!$finished) { $total_bytes_read += $current_bytes_read; }
-			$total_bytes_read += $current_bytes_read;
-			# calculate transfer rate of this interval
-			my $current_time_elapsed = $timestamp_after_writing - $timestamp_before_reading;
-			if ($current_time_elapsed == 0) { $current_time_elapsed = 1; }
-			my $instantaneous_transfer_rate = ( $current_bytes_read / $current_time_elapsed );
-
-			push (@rate_history, "$timestamp_after_writing,$instantaneous_transfer_rate");
-
-			my $time_elapsed = $timestamp_after_writing - $begin;
-
-			display_progress ($total_bytes_read, $source_size, $time_elapsed, $stat_iteration, \@rate_history);
+			progress_update($progress, $current_bytes_read);
 
 			$alarmed = 0;
-			$timestamp_before_reading = $timestamp_after_writing;
 			$current_bytes_read = 0;
-			$stat_iteration++;
 		}
 	}
 	print STDERR "\n";
 	alarm(0);
 }
 
-sub display_progress {
-	my $total_bytes_read = shift;
-	my $source_size = shift;
-	my $time_elapsed = shift;
-	my $iteration = shift;
-	my $rate_history_reference = shift;
+sub close_files {
+	my $SOURCE = shift;
+	my $TARGET = shift;
 
-	my $printable_bytes_read = printable_bytes ($total_bytes_read);
-
-	# process @rate_history to get 5m, 1m, 10s, and most-recent average rates
-	my @five_minute_rate;
-	my @one_minute_rate;
-	my @ten_second_rate;
-	my $now = monotime();
-
-	for my $index (reverse 0 .. (scalar(@{$rate_history_reference})-1) ) {
-		my $row = ${$rate_history_reference}[$index];
-
-		my ($time,$rate) = split(/,/,$row);
-		my $age = $now-$time;
-
-		# transfers that happened in the last ten seconds
-		if ($age <= 10) { push (@ten_second_rate,$rate); }
-		# transfers that happened in the last minute
-		if ($age <= 60) { push (@one_minute_rate,$rate); }
-		# transfers that happened in the last five minutes
-		if ($age <= 60*5) { push (@five_minute_rate,$rate); ;}
-		# remove any rows older than five minutes
-		if ($age > 5*60) {
-			splice (@{$rate_history_reference}, $index);
-		}
-	}
-
-	# put together 5m,1m,and 10s rolling averages
-	my $five_minute_mean = average_array(@five_minute_rate);
-	my $one_minute_mean = average_array(@one_minute_rate);
-	my $ten_second_mean = average_array(@ten_second_rate);
-	my $printable_aggregate_mean = printable_bytes($total_bytes_read/$time_elapsed) . "/sec";
-
-	# get the instaneous (most recent single block) rate
-	my $rate_history_elements = scalar (@{$rate_history_reference});
-	my $current_row = ${$rate_history_reference}[$rate_history_elements-1];
-	my ($current_time,$current_rate) = split (/,/,$current_row);
-
-	# average our four rates to get a final guesstimated rate
-	my @non_null_rates;
-	if ($five_minute_mean) { push (@non_null_rates,$five_minute_mean); }
-	if ($one_minute_mean) { push (@non_null_rates,$one_minute_mean); }
-	if ($ten_second_mean) { push (@non_null_rates,$ten_second_mean); }
-	if ($current_rate) { push (@non_null_rates,$current_rate); }
-	my $transfer_rate = average_array (@non_null_rates);
-	my $display_transfer_rate = printable_bytes ($transfer_rate) . "/sec";
-	my $printable_current_rate = printable_bytes ($current_rate) . "/sec";
-
-	my $remaining_data = $source_size - $total_bytes_read;
-
-	# clear last status line before printing a new one
-	print STDERR $clearline;
-
-	my $display_source_size = printable_bytes ($source_size);
-
-	my $estimated_time_remaining;
-	my $display_estimated_time_remaining = '';
-
-	if ($source_size && $remaining_data && $transfer_rate) {
-		$estimated_time_remaining = $remaining_data / $transfer_rate;
-		$display_estimated_time_remaining = printable_seconds($estimated_time_remaining);
-	}
-
-	# find terminal length, extrapolate bar length
-	my ($wchar, $hcar, $wpixels, $hpixels) = GetTerminalSize();
-	# no more ridiculously over-long meters please
-	if ($wchar > 80) { $wchar = 80; }
-	# leave one extra character so we can print a \n to keep things cleaner if user resizes the term
-	$wchar --;
-
-	# now build the meter output
-	my $printable_time_elapsed = printable_seconds($time_elapsed);
-	my $message = "  $printable_time_elapsed [" . ($source_size ? $display_source_size : $printable_bytes_read) . "]";
-	$message .= " [AVG $printable_aggregate_mean ";
-	# check to make sure there's room to display both rates, drop CUR if necessary
-	if ($wchar >= 75) { $message .= "CUR $printable_current_rate"; }
-	$message.= "]";
-
-	my $eta = "ETA ";
-	if ($estimated_time_remaining) {
-		$eta .= $display_estimated_time_remaining;
-	} else {
-		$eta .= "??:??:??";
-	}
-
-	# leave one extra character for an explicit \n, avoids some mess if the terminal is resized during the run
-	my $messagelength = length ($message) + length ($eta) ;
-	my $barlength = $wchar - $messagelength -2 ;
-
-	# build the bar
-	my $percentdone = 0;
-	if ($source_size) { $percentdone = ($source_size - $remaining_data) / $source_size ; }
-	my $donelength = $barlength * $percentdone;
-
-	# round, don't truncate
-	# $donelength = sprintf("%0f", $donelength);
-
-	# the part we've done
-	my $bartext = "[";
-	if ($source_size) {
-		$bartext .= progress_bar($barlength, "   ▏▎▍▌▋▊▉█", $percentdone);
-	}
-	else {
-		my @spinner = ("-    ", " -   ", "  -  ", "   - ", "    -", "   - ", "  -  ", " -   ");
-		$bartext .= $spinner[$iteration % ($#spinner + 1)];
-		# $bartext .= spinner(("-", "\\", "|", "/", "-", " -", " /", " |", " \\", " -"), $iteration);
-	}
-	# $bartext .= "=" x $donelength;
-	# $bartext .= ">";
-
-	# the part we haven't done yet
-	# my $emptylength = $barlength - $donelength;
-	# $bartext .= " " x $emptylength;
-	$bartext .= "]";
-
-	$message .= "$bartext $eta";
-
-	print STDERR "$message";
+	close SOURCE
+		or die $! ? "Error closing source file $SOURCE: $!"
+		: "Exit status $? from $SOURCE\n";
+	close TARGET
+		or die $! ? "Error closing target file $TARGET: $!"
+		: "Exit status $? from $TARGET\n";
 }
 
-sub average_array {
-	my @array = @_;
-	my $sum;
-	if ($#array < 1) { return 0; }
-	foreach (@array) { $sum+= $_; }
-	return $sum/$#array;
+sub open_files {
+	my $SOURCE = shift;
+	my $TARGET = shift;
+	my $blocksize = shift;
+
+	# if SOURCE is a file, a -s check is all we need to find its size
+	my $size = -s $SOURCE;
+
+	if (-b $SOURCE || -c $SOURCE) {
+		# this is a block device or character device, -s won't work
+		open TEST, "<", $SOURCE;
+		seek TEST, 0, 2;
+		$size = tell TEST;
+		close TEST;
+	}
+
+	sysopen SOURCE, $SOURCE, O_RDONLY
+		or die $! ? "Error opening source file $SOURCE: $!"
+		: "Exit status $? from sysopen SOURCE,$SOURCE,O_RDONLY\n";
+	binmode SOURCE;
+
+	open TARGET, ">", "$TARGET"
+		or die $! ? "Error opening target file $TARGET: $!"
+		: "Exit status $? from open TARGET,>,$TARGET\n";
+	binmode TARGET;
+
+	return $size;
 }
+
+# Formatting and stats functions
 
 sub printable_seconds {
 	my $seconds = shift;
@@ -341,64 +223,6 @@ sub printable_bytes {
 	return $ret;
 }
 
-sub printable_bytesx {
-	my $bytes = shift;
-	my $printable_bytes;
-
-	if ($bytes >= 1024*1024*1024*1024) {
-		$printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024/1024) . 'TiB';
-	} elsif ($bytes >= 1024*1024*1024) {
-		$printable_bytes = sprintf("%.1f",$bytes/1024/1024/1024) . 'GiB';
-	} elsif ($bytes >= 1024*1024) {
-		$printable_bytes = sprintf("%.1f",$bytes/1024/1024) . 'MiB';
-	} else {
-		$printable_bytes = sprintf("%d",$bytes/1024) . 'KiB';
-	}
-
-	return $printable_bytes;
-}
-
-sub close_files {
-	my $SOURCE = shift;
-	my $TARGET = shift;
-
-	close SOURCE
-		or die $! ? "Error closing source file $SOURCE: $!"
-		: "Exit status $? from $SOURCE\n";
-	close TARGET
-		or die $! ? "Error closing target file $TARGET: $!"
-		: "Exit status $? from $TARGET\n";
-}
-
-sub open_files {
-	my $SOURCE = shift;
-	my $TARGET = shift;
-	my $blocksize = shift;
-
-	# if SOURCE is a file, a -s check is all we need to find its size
-	my $size = -s $SOURCE;
-
-	if (-b $SOURCE || -c $SOURCE) {
-		# this is a block device or character device, -s won't work
-		open TEST, "<", $SOURCE;
-		seek TEST, 0, 2;
-		$size = tell TEST;
-		close TEST;
-	}
-
-	sysopen SOURCE, $SOURCE, O_RDONLY
-		or die $! ? "Error opening source file $SOURCE: $!"
-		: "Exit status $? from sysopen SOURCE,$SOURCE,O_RDONLY\n";
-	binmode SOURCE;
-
-	open TARGET, ">", "$TARGET"
-		or die $! ? "Error opening target file $TARGET: $!"
-		: "Exit status $? from open TARGET,>,$TARGET\n";
-	binmode TARGET;
-
-	return $size;
-}
-
 sub progress_bar {
 	my $width = shift;
 	my $chars = shift;
@@ -418,4 +242,107 @@ sub progress_bar {
 	}
 
 	$bar . ($bgch x ($width - length($bar)))
+}
+
+sub progress_init {
+	my $source_size = shift;
+	my $progress_chars = shift || "   ▏▎▍▌▋▊▉█";
+	my @spinner_states = shift || ("-    ", " -   ", "  -  ", "   - ", "    -", "   - ", "  -  ", " -   ");
+	my $now = monotime;
+	{
+		'progress_chars' => $progress_chars,
+		'spinner_states' => \@spinner_states,
+		'iteration' => 0,
+		'source_size' => $source_size,
+		'total_bytes_read' => 0,
+		'start_time' => $now,
+		'last_timestamp' => $now,
+		'transfer_rate' => -1,
+	}
+}
+
+sub progress_update {
+	my $state = shift;
+	my $bytes_read = shift;
+	my $now = shift || monotime();
+
+	my $total_bytes_read = ($state->{'total_bytes_read'} += $bytes_read);
+	my $source_size = $state->{'source_size'};
+	my $transfer_rate = $state->{'transfer_rate'};
+	my $iteration = $state->{'iteration'}++;
+	my $last_timestamp = $state->{'last_timestamp'};
+	my $total_elapsed = $now - $state->{'start_time'};
+	my $elapsed = $now - $last_timestamp;
+
+	$state->{'last_timestamp'} = $now;
+
+	if ($elapsed == 0) { $elapsed = 1; }
+	my $current_rate = ( $bytes_read / $elapsed );
+	my $overall_rate = ( $total_bytes_read / $total_elapsed);
+
+	if ($transfer_rate == -1) {
+		# Set the initial value to the only one we have
+		$transfer_rate = $current_rate;
+	} else {
+		# Exponentially smooth our overall throughput for ETA purposes
+		# A higher smoothing value weighs the most recent value higher
+		my $smoothing = 0.8;
+		$transfer_rate = ((1 - $smoothing) * $current_rate) + ($smoothing * $transfer_rate);
+	}
+	$state->{'transfer_rate'} = $transfer_rate;
+
+	my $remaining_data = $source_size - $total_bytes_read;
+
+	my $estimated_time_remaining;
+
+	if ($source_size && $remaining_data && $transfer_rate) {
+		$estimated_time_remaining = $remaining_data / $transfer_rate;
+	}
+
+	# find terminal length, extrapolate bar length
+	my ($wchar, $hcar, $wpixels, $hpixels) = GetTerminalSize();
+	# no more ridiculously over-long meters please
+	if ($wchar > 80) { $wchar = 80; }
+	# leave one extra character so we can print a \n to keep things cleaner if user resizes the term
+	$wchar --;
+
+	# Avoid erasing existing terminal contents
+	print STDERR "\n" unless ($iteration);
+
+	# clear last status line before printing a new one
+	print STDERR $clearline;
+
+	# now build the meter output
+	my $printable_time_elapsed = printable_seconds($total_elapsed);
+	my $message = sprintf("  %s [%s]", printable_seconds($total_elapsed),
+	                     $source_size ? printable_bytes($source_size) : printable_bytes($total_bytes_read));
+	$message .= sprintf(" [AVG %s/sec", printable_bytes($overall_rate));
+
+	# check to make sure there's room to display both rates, drop CUR if necessary
+	if ($wchar >= 75) { $message .= sprintf(" CUR %s/sec", printable_bytes ($current_rate)); }
+	$message.= "] ";
+
+	my $eta = '';
+	if ($estimated_time_remaining) {
+		$eta = "ETA ";
+		$eta .= printable_seconds($estimated_time_remaining);
+	}
+
+	# leave one extra character for an explicit \n, avoids some mess if the terminal is resized during the run
+	my $messagelength = length($message) + length($eta) ;
+	my $barlength = $wchar - $messagelength -2 ;
+
+	my $bartext = "[";
+	if ($source_size) {
+		my $percentdone = ($source_size - $remaining_data) / $source_size;
+		$bartext .= progress_bar($barlength, $state->{'progress_chars'}, $percentdone);
+	}
+	else {
+		$bartext .= $state->{'spinner_states'}[$iteration % (scalar(@{$state->{'spinner_states'}}))];
+	}
+	$bartext .= "]";
+
+	$message .= "$bartext $eta";
+
+	print STDERR "$message\n";
 }
