@@ -228,6 +228,8 @@ sub progress_bar {
 	my $chars = shift;
 	my $pos = shift;
 
+	return '' if ($width < 1);
+
 	my $bgch = substr($chars, 0, 1);
 	my $fillch = substr($chars, -1, 1);
 	my $intermediates = substr($chars, 1, -1);
@@ -246,7 +248,7 @@ sub progress_bar {
 
 sub progress_init {
 	my $source_size = shift;
-	my $progress_chars = shift || "   ▏▎▍▌▋▊▉█";
+	my $progress_chars = shift || "  ▁▂▃▄▅▆▇█";
 	my @spinner_states = shift || ("-    ", " -   ", "  -  ", "   - ", "    -", "   - ", "  -  ", " -   ");
 	my $now = monotime;
 	{
@@ -293,10 +295,18 @@ sub progress_update {
 
 	my $remaining_data = $source_size - $total_bytes_read;
 
-	my $estimated_time_remaining;
+	my $estimated_time_remaining = 0;
+	my $eta = '';
 
-	if ($source_size && $remaining_data && $transfer_rate) {
-		$estimated_time_remaining = $remaining_data / $transfer_rate;
+	if ($source_size) {
+		$eta .= ' ETA ';
+		if ($remaining_data && $transfer_rate) {
+			$eta .= printable_seconds($remaining_data / $transfer_rate);
+		} elsif (!$transfer_rate) {
+			$eta .= '??:??:??';
+		} else {
+			$eta .= '00:00:00';
+		}
 	}
 
 	# find terminal length, extrapolate bar length
@@ -304,7 +314,7 @@ sub progress_update {
 	# no more ridiculously over-long meters please
 	if ($wchar > 80) { $wchar = 80; }
 	# leave one extra character so we can print a \n to keep things cleaner if user resizes the term
-	$wchar --;
+	$wchar -= 1;
 
 	# Avoid erasing existing terminal contents
 	print STDERR "\n" unless ($iteration);
@@ -313,36 +323,34 @@ sub progress_update {
 	print STDERR $clearline;
 
 	# now build the meter output
-	my $printable_time_elapsed = printable_seconds($total_elapsed);
-	my $message = sprintf("  %s [%s]", printable_seconds($total_elapsed),
-	                     $source_size ? printable_bytes($source_size) : printable_bytes($total_bytes_read));
-	$message .= sprintf(" [AVG %s/sec", printable_bytes($overall_rate));
+	my $message = sprintf(" %s [%s] [AVG %s/s", printable_seconds($total_elapsed),
+	                      printable_bytes($total_bytes_read), printable_bytes($overall_rate));
 
 	# check to make sure there's room to display both rates, drop CUR if necessary
-	if ($wchar >= 75) { $message .= sprintf(" CUR %s/sec", printable_bytes ($current_rate)); }
+	if ($wchar >= 65) { $message .= sprintf(" CUR %s/s", printable_bytes ($current_rate)); }
 	$message.= "] ";
 
-	my $eta = '';
-	if ($estimated_time_remaining) {
-		$eta = "ETA ";
-		$eta .= printable_seconds($estimated_time_remaining);
-	}
+	my $message_length = length($message) + length($eta);
+	my $available_space = $wchar - $message_length;
+	my $bartext = '';
 
-	# leave one extra character for an explicit \n, avoids some mess if the terminal is resized during the run
-	my $messagelength = length($message) + length($eta) ;
-	my $barlength = $wchar - $messagelength -2 ;
-
-	my $bartext = "[";
 	if ($source_size) {
-		my $percentdone = ($source_size - $remaining_data) / $source_size;
-		$bartext .= progress_bar($barlength, $state->{'progress_chars'}, $percentdone);
-	}
-	else {
-		$bartext .= $state->{'spinner_states'}[$iteration % (scalar(@{$state->{'spinner_states'}}))];
-	}
-	$bartext .= "]";
+		my $fraction_done = ($source_size - $remaining_data) / $source_size;
 
-	$message .= "$bartext $eta";
+		# Assuming a single char progress bar is usable
+		if ($available_space >= 8) {
+			my $barlength = $available_space - 7;
+			$bartext .= '[' . progress_bar($barlength, $state->{'progress_chars'}, $fraction_done) . ']'
+		}
+
+		if ($available_space >= 5) {
+			$bartext .= sprintf(" %3d%%", $fraction_done * 100);
+		}
+	} elsif ($available_space >= length($state->{'spinner_states'}[0]) + 2) {
+		$bartext .= '[' . $state->{'spinner_states'}[$iteration % (scalar(@{$state->{'spinner_states'}}))] . ']';
+	}
+
+	$message .= $bartext . $eta;
 
 	print STDERR "$message\n";
 }
