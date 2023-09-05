@@ -313,7 +313,6 @@ sub printable_seconds {
 sub printable_bytes {
 	my $num = shift;
 	my $length = shift || 5;
-	$length--;
 
 	my @size_prefix = ('B', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y');
 	my @formats = ('%*.2f%s', '%*.1f%s', '%*.0f%s');
@@ -329,12 +328,12 @@ sub printable_bytes {
 	my $u = $size_prefix[$index];
 
 	if ($index == 0 || $num % ($divisor ** $index) == 0) {
-		return sprintf("%*d%s", $length, $n, $u);
+		return sprintf("%*d%s", $length - 1, $n, $u);
 	}
 
 	my $ret;
 	foreach my $fmt (@formats) {
-		$ret = sprintf($fmt, $length, $n, $u);
+		$ret = sprintf($fmt, $length - 1, $n, $u);
 		if (length($ret) <= $length) {
 			return $ret;
 		}
