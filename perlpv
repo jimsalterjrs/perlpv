@@ -316,7 +316,7 @@ sub printable_bytes {
 	$length--;
 
 	my @size_prefix = ('B', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y');
-	my @formats = ("%${length}.2f%s", "%${length}.1f%s", "%${length}.0f%s");
+	my @formats = ('%*.2f%s', '%*.1f%s', '%*.0f%s');
 	my $divisor = 1024;
 
 	my $n = $num;
@@ -329,13 +329,12 @@ sub printable_bytes {
 	my $u = $size_prefix[$index];
 
 	if ($index == 0 || $num % ($divisor ** $index) == 0) {
-		return sprintf("%${length}d%s", $n, $u);
+		return sprintf("%*d%s", $length, $n, $u);
 	}
 
-	$length++;
 	my $ret;
 	foreach my $fmt (@formats) {
-		$ret = sprintf($fmt, $n, $u);
+		$ret = sprintf($fmt, $length, $n, $u);
 		if (length($ret) <= $length) {
 			return $ret;
 		}
