@@ -287,7 +287,7 @@ sub progress_update {
 		$transfer_rate = $current_rate;
 	} else {
 		# Exponentially smooth our overall throughput for ETA purposes
-		# A higher smoothing value weighs the most recent value higher
+		# A higher smoothing value weighs the most recent value less
 		my $smoothing = 0.8;
 		$transfer_rate = ((1 - $smoothing) * $current_rate) + ($smoothing * $transfer_rate);
 	}
