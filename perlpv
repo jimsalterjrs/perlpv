@@ -4,9 +4,10 @@ use strict;
 use warnings;
 use utf8;
 
-use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC alarm);
 use Errno qw(EINTR);
 use Fcntl qw(O_RDONLY);
+use List::Util qw(pairs);
+use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC alarm);
 
 # apt install libterm-readkey-perl on Debian derivatives eg Ubuntu
 use Term::ReadKey;
@@ -19,25 +20,37 @@ my $cursorup = "\033[1A";
 my $cursordown = "\033[1B";
 my $beginline = "\033[1E";
 my $cleartoend = "\033[K";
-my $clearline = $beginline . $cursorup . $cleartoend;
-
-my $SOURCE = $ARGV[0];
-my $TARGET = $ARGV[1];
+my $clearline = $beginline . $cleartoend;
 
 # Set transfer blocksize to 512KiB. This doesn't appear to affect transfer rate MUCH, at least on my
 # (i9-12900K) system. But it does appear SLIGHTLY faster, at least for the inital couple of seconds,
 # than using 64KiB.
 my $blocksize = 1024 * 512;
 
-my $begin = monotime();
+if (scalar(@ARGV) % 2 != 0) {
+	die "Usage: $0 SOURCE DEST [..]";
+}
 
-	my $size = open_files($SOURCE, $TARGET, $blocksize);
+my $total_size = 0;
+my $known_size = 1;
+my @tasks;
 
-	transfer_data($size);
+for my $pair (pairs @ARGV) {
+	my ($source, $target) = @$pair;
+	my $size = file_size($source);
 
-	close_files($SOURCE, $TARGET);
+	if (defined($size)) {
+		$total_size += $size;
+	} else {
+		$known_size = 0;
+	}
 
-my $end = monotime();
+	push(@tasks, {'source' => $source, 'target' => $target, 'size' => $size});
+}
+
+for my $task (@tasks) {
+	transfer_data($task);
+}
 
 exit 0;
 
@@ -46,7 +59,9 @@ sub monotime {
 }
 
 sub transfer_data {
-	my $source_size = shift;
+	my $task = shift;
+	my ($source, $target, $source_size) = ($task->{'source'}, $task->{'target'}, $task->{'size'});
+	my ($in, $out) = open_files($source, $target);
 
 	my $finished = 0;
 	my $alarmed = 0;
@@ -76,7 +91,7 @@ sub transfer_data {
 		if ($buffer_pending_bytes == 0 && $bytes_read != 0) {
 			# Try to refill our empty buffer
 			$buffer = '';
-			$bytes_read = sysread(SOURCE, $buffer, $blocksize);
+			$bytes_read = sysread($in, $buffer, $blocksize);
 
 			if (defined($bytes_read)) {
 				$current_bytes_read += $bytes_read;
@@ -84,19 +99,19 @@ sub transfer_data {
 			} elsif ($! == EINTR) {
 				$bytes_read = -1;
 			} else {
-				die "Error reading from $SOURCE: $!";
+				die "Error reading from $source: $!";
 			}
 		}
 
 		if ($buffer_pending_bytes != 0) {
 			# Try to drain the non-empty buffer
-			my $bytes_written = syswrite(TARGET, $buffer, $buffer_pending_bytes,
+			my $bytes_written = syswrite($out, $buffer, $buffer_pending_bytes,
 				length($buffer) - $buffer_pending_bytes);
 
 			if (defined($bytes_written)) {
 				$buffer_pending_bytes -= $bytes_written;
 			} elsif ($! != EINTR) {
-				die $! ? "Error writing to $TARGET: $!" : "Exit status $? from $TARGET";
+				die $! ? "Error writing to $target: $!" : "Exit status $? from $target";
 			}
 		}
 
@@ -105,55 +120,67 @@ sub transfer_data {
 		# Record stats if we've received SIGALRM or have hit EOF and finished writing
 		if ($alarmed || $finished) {
 			progress_update($progress, $current_bytes_read);
+			progress_finish() if $finished;
 
 			$alarmed = 0;
 			$current_bytes_read = 0;
 		}
 	}
-	print STDERR "\n";
 	alarm(0);
-}
-
-sub close_files {
-	my $SOURCE = shift;
-	my $TARGET = shift;
-
-	close SOURCE
-		or die $! ? "Error closing source file $SOURCE: $!"
-		: "Exit status $? from $SOURCE\n";
-	close TARGET
-		or die $! ? "Error closing target file $TARGET: $!"
-		: "Exit status $? from $TARGET\n";
+	close_files($task, $in, $out);
 }
 
 sub open_files {
-	my $SOURCE = shift;
-	my $TARGET = shift;
-	my $blocksize = shift;
+	my $source = shift;
+	my $target = shift;
 
-	# if SOURCE is a file, a -s check is all we need to find its size
-	my $size = -s $SOURCE;
+	# Seems a bit arbitrary to sysopen one and open the other?
+	# I don't think it matters either way
+	sysopen my $in, $source, O_RDONLY
+		or die $! ? "Error opening source file $source: $!"
+		: "Exit status $? from sysopen SOURCE,$source,O_RDONLY\n";
+	binmode $in;
 
-	if (-b $SOURCE || -c $SOURCE) {
-		# this is a block device or character device, -s won't work
-		open TEST, "<", $SOURCE;
-		seek TEST, 0, 2;
-		$size = tell TEST;
-		close TEST;
+	open my $out, ">", "$target"
+		or die $! ? "Error opening target file $target: $!"
+		: "Exit status $? from open TARGET,>,$target\n";
+	binmode $out;
+
+	return ($in, $out);
+}
+
+sub close_files {
+	my $task = shift;
+	my $source = shift;
+	my $target = shift;
+
+	# Errors from writing are more likely, but also more critical, so close that first
+	close $target
+		or die $! ? "Error closing target file $task->{'target'}: $!"
+		: "Exit status $? from $task->{'target'}\n";
+
+	close $source
+		or die $! ? "Error closing source file $task->{'source'}: $!"
+		: "Exit status $? from $task->{'source'}\n";
+}
+
+sub file_size {
+	my $path = shift;
+	my $size;
+
+	if (-b $path || -c $path) {
+		if (open TEST, "<", $path) {
+			seek TEST, 0, 2;
+			$size = tell TEST;
+			close TEST;
+		}
+	} else {
+		$size = -s $path;
 	}
-
-	sysopen SOURCE, $SOURCE, O_RDONLY
-		or die $! ? "Error opening source file $SOURCE: $!"
-		: "Exit status $? from sysopen SOURCE,$SOURCE,O_RDONLY\n";
-	binmode SOURCE;
-
-	open TARGET, ">", "$TARGET"
-		or die $! ? "Error opening target file $TARGET: $!"
-		: "Exit status $? from open TARGET,>,$TARGET\n";
-	binmode TARGET;
 
 	return $size;
 }
+
 
 # Formatting and stats functions
 
@@ -315,11 +342,8 @@ sub progress_update {
 	# leave one extra character so we can print a \n to keep things cleaner if user resizes the term
 	$wchar -= 1;
 
-	# Avoid erasing existing terminal contents
-	print STDERR "\n" unless ($iteration);
-
 	# clear last status line before printing a new one
-	print STDERR $clearline;
+	print STDERR $clearline if $iteration > 0;
 
 	# now build the meter output
 	my $message = sprintf(" %s [%s] [AVG %s/s", printable_seconds($total_elapsed),
@@ -352,4 +376,8 @@ sub progress_update {
 	$message .= $bartext . $eta;
 
 	print STDERR $message;
+}
+
+sub progress_finish() {
+	print STDERR "\n";
 }
