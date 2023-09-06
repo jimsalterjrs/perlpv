@@ -295,7 +295,6 @@ sub progress_update {
 
 	my $remaining_data = $source_size - $total_bytes_read;
 
-	my $estimated_time_remaining = 0;
 	my $eta = '';
 
 	if ($source_size) {
