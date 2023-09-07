@@ -345,6 +345,28 @@ sub bar_render {
 	$ret;
 }
 
+sub render_eta {
+	my $total_size = shift;
+	my $remaining_data = $total_size - shift;
+	my $transfer_rate = shift;
+
+	my $eta = '';
+
+	$remaining_data = 0 if $remaining_data < 0;
+
+	if ($total_size) {
+		if ($remaining_data && $transfer_rate) {
+			$eta = printable_seconds($remaining_data / $transfer_rate);
+		} elsif (!$transfer_rate) {
+			$eta = '??:??:??';
+		} else {
+			$eta = '00:00:00';
+		}
+	}
+
+	$eta
+}
+
 sub progress_update {
 	my $state = shift;
 	my $bytes_read = shift;
@@ -375,21 +397,6 @@ sub progress_update {
 	}
 	$state->{'transfer_rate'} = $transfer_rate;
 
-	my $remaining_data = $source_size - $total_bytes_read;
-
-	my $eta = '';
-
-	if ($source_size) {
-		$eta .= ' ETA ';
-		if ($remaining_data && $transfer_rate) {
-			$eta .= printable_seconds($remaining_data / $transfer_rate);
-		} elsif (!$transfer_rate) {
-			$eta .= '??:??:??';
-		} else {
-			$eta .= '00:00:00';
-		}
-	}
-
 	# find terminal length, extrapolate bar length
 	my ($wchar, $hcar, $wpixels, $hpixels) = GetTerminalSize();
 	# no more ridiculously over-long meters please
@@ -410,7 +417,7 @@ sub progress_update {
 	bar_add($bar, 0, ']');
 
 	if ($source_size) {
-		my $fraction_done = ($source_size - $remaining_data) / $source_size;
+		my $fraction_done = $total_bytes_read / $source_size;
 		$fraction_done = 1.0 if $fraction_done > 1;
 
 		bar_add($bar, 4, ' [');
@@ -421,7 +428,8 @@ sub progress_update {
 		bar_add($bar, 2, ' [' . $state->{'spinner_states'}[$iteration % (scalar(@{$state->{'spinner_states'}}))] . ']');
 	}
 
-	bar_add($bar, 2, $eta);
+	my $eta = render_eta($source_size, $total_bytes_read, $transfer_rate);
+	bar_add($bar, 2, " ETA $eta") if $eta;
 
 	print STDERR bar_render($bar, $wchar);
 }
