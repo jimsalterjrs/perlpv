@@ -256,6 +256,7 @@ sub progress_bar {
 	my $pos = shift;
 
 	return '' if ($width < 1);
+	$pos = 1.0 if $pos > 1;
 
 	my $bgch = substr($chars, 0, 1);
 	my $fillch = substr($chars, -1, 1);
@@ -290,6 +291,82 @@ sub progress_init {
 	}
 }
 
+sub bar_init {
+	{ 'segments' => [], 'widths' => {} }
+}
+
+# Add a string to the bar with a given priority
+# 0 is always rendered, >1 are only rendered if there is space, higher values
+# dropped first
+# A sub may be added which will receive the remaining width as an argument.
+# This should be given a minimum acceptable width as the fourth argument
+sub bar_add {
+	my $bar = shift;
+	my $priority = shift;
+	my $content = shift;
+	my $width = shift || length($content);
+
+	$bar->{'widths'}{$priority} += $width;
+	push(@{$bar->{'segments'}}, [$priority, $content]);
+}
+
+sub bar_render {
+	my $bar = shift;
+	my $max_width = shift;
+
+	my $widths = $bar->{'widths'};
+
+	my $width = 0;
+	my $priority_limit = 0;
+	for my $pri (sort keys %{$widths}) {
+		my $pri_width = $widths->{$pri};
+		if ($width + $pri_width >= $max_width) {
+			$priority_limit = $pri - 1;
+			last;
+		}
+		$priority_limit = $pri;
+		$width += $pri_width;
+	}
+
+	$priority_limit ||= 0;
+	my $remaining_width = $max_width - $width;
+	my $ret = '';
+
+	for my $segment (@{$bar->{'segments'}}) {
+		my ($priority, $content) = @{$segment};
+		if ($priority <= $priority_limit) {
+			if (ref $content eq 'CODE') {
+				$ret .= &$content($remaining_width);
+			} else {
+				$ret .= $content;
+			}
+		}
+	}
+	$ret;
+}
+
+sub render_eta {
+	my $total_size = shift;
+	my $remaining_data = $total_size - shift;
+	my $transfer_rate = shift;
+
+	my $eta = '';
+
+	$remaining_data = 0 if $remaining_data < 0;
+
+	if ($total_size) {
+		if ($remaining_data && $transfer_rate) {
+			$eta = printable_seconds($remaining_data / $transfer_rate);
+		} elsif (!$transfer_rate) {
+			$eta = '??:??:??';
+		} else {
+			$eta = '00:00:00';
+		}
+	}
+
+	$eta
+}
+
 sub progress_update {
 	my $state = shift;
 	my $bytes_read = shift;
@@ -320,21 +397,6 @@ sub progress_update {
 	}
 	$state->{'transfer_rate'} = $transfer_rate;
 
-	my $remaining_data = $source_size - $total_bytes_read;
-
-	my $eta = '';
-
-	if ($source_size) {
-		$eta .= ' ETA ';
-		if ($remaining_data && $transfer_rate) {
-			$eta .= printable_seconds($remaining_data / $transfer_rate);
-		} elsif (!$transfer_rate) {
-			$eta .= '??:??:??';
-		} else {
-			$eta .= '00:00:00';
-		}
-	}
-
 	# find terminal length, extrapolate bar length
 	my ($wchar, $hcar, $wpixels, $hpixels) = GetTerminalSize();
 	# no more ridiculously over-long meters please
@@ -345,37 +407,31 @@ sub progress_update {
 	# clear last status line before printing a new one
 	print STDERR $clearline if $iteration > 0;
 
-	# now build the meter output
-	my $message = sprintf(" %s [%s] [AVG %s/s", printable_seconds($total_elapsed),
-	                      printable_bytes($total_bytes_read), printable_bytes($overall_rate));
+	my $bar = bar_init();
 
-	# check to make sure there's room to display both rates, drop CUR if necessary
-	if ($wchar >= 65) { $message .= sprintf(" CUR %s/s", printable_bytes ($current_rate)); }
-	$message.= "] ";
-
-	my $message_length = length($message) + length($eta);
-	my $available_space = $wchar - $message_length;
-	my $bartext = '';
+	bar_add($bar, 0, sprintf(' %s [%s] [AVG %s/s',
+	                         printable_seconds($total_elapsed),
+	                         printable_bytes($total_bytes_read),
+							 printable_bytes($overall_rate)));
+	bar_add($bar, 1, sprintf(" CUR %s/s", printable_bytes ($current_rate)));
+	bar_add($bar, 0, ']');
 
 	if ($source_size) {
-		my $fraction_done = ($source_size - $remaining_data) / $source_size;
+		my $fraction_done = $total_bytes_read / $source_size;
+		$fraction_done = 1.0 if $fraction_done > 1;
 
-		# Assuming a single char progress bar is usable
-		if ($available_space >= 8) {
-			my $barlength = $available_space - 7;
-			$bartext .= '[' . progress_bar($barlength, $state->{'progress_chars'}, $fraction_done) . ']'
-		}
-
-		if ($available_space >= 5) {
-			$bartext .= sprintf(" %3d%%", $fraction_done * 100);
-		}
-	} elsif ($available_space >= length($state->{'spinner_states'}[0]) + 2) {
-		$bartext .= '[' . $state->{'spinner_states'}[$iteration % (scalar(@{$state->{'spinner_states'}}))] . ']';
+		bar_add($bar, 4, ' [');
+		bar_add($bar, 4, sub { progress_bar($_[0], $state->{'progress_chars'}, $fraction_done) }, 1);
+		bar_add($bar, 4, ']');
+		bar_add($bar, 3, sprintf(" %3d%%", $fraction_done * 100));
+	} else {
+		bar_add($bar, 2, ' [' . $state->{'spinner_states'}[$iteration % (scalar(@{$state->{'spinner_states'}}))] . ']');
 	}
 
-	$message .= $bartext . $eta;
+	my $eta = render_eta($source_size, $total_bytes_read, $transfer_rate);
+	bar_add($bar, 2, " ETA $eta") if $eta;
 
-	print STDERR $message;
+	print STDERR bar_render($bar, $wchar);
 }
 
 sub progress_finish() {
