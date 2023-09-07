@@ -298,13 +298,15 @@ sub bar_init {
 # Add a string to the bar with a given priority
 # 0 is always rendered, >1 are only rendered if there is space, higher values
 # dropped first
-# A sub may be added which will receive the remaining width as an argument
+# A sub may be added which will receive the remaining width as an argument.
+# This should be given a minimum acceptable width as the fourth argument
 sub bar_add {
 	my $bar = shift;
 	my $priority = shift;
 	my $content = shift;
+	my $width = shift || length($content);
 
-	$bar->{'widths'}{$priority} += ref $content ? 1 : length($content);;
+	$bar->{'widths'}{$priority} += $width;
 	push(@{$bar->{'segments'}}, [$priority, $content]);
 }
 
@@ -412,7 +414,7 @@ sub progress_update {
 		$fraction_done = 1.0 if $fraction_done > 1;
 
 		bar_add($bar, 4, ' [');
-		bar_add($bar, 4, sub { progress_bar($_[0], $state->{'progress_chars'}, $fraction_done) });
+		bar_add($bar, 4, sub { progress_bar($_[0], $state->{'progress_chars'}, $fraction_done) }, 1);
 		bar_add($bar, 4, ']');
 		bar_add($bar, 3, sprintf(" %3d%%", $fraction_done * 100));
 	} else {
