@@ -9,18 +9,9 @@ use Fcntl qw(O_RDONLY);
 use List::Util qw(pairs);
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC alarm);
 
-# apt install libterm-readkey-perl on Debian derivatives eg Ubuntu
-use Term::ReadKey;
-
 # We need to turn off buffering of STDERR to get rapid display of progress.
 STDERR->autoflush(1);
 binmode(STDERR, ":encoding(UTF-8)");
-
-my $cursorup = "\033[1A";
-my $cursordown = "\033[1B";
-my $beginline = "\033[1E";
-my $cleartoend = "\033[K";
-my $clearline = $beginline . $cleartoend;
 
 # Set transfer blocksize to 512KiB. This doesn't appear to affect transfer rate MUCH, at least on my
 # (i9-12900K) system. But it does appear SLIGHTLY faster, at least for the inital couple of seconds,
@@ -31,25 +22,27 @@ if (scalar(@ARGV) % 2 != 0) {
 	die "Usage: $0 SOURCE DEST [..]";
 }
 
-my $total_size = 0;
-my $known_size = 1;
-my @tasks;
+my $cursorup = "\033[1A";
+my $cursordown = "\033[1B";
+my $beginline = "\033[1E";
+my $cleartoend = "\033[K";
+my $clearline = $cursorup . $beginline . $cleartoend;
+
+my $progress = Progress->new();
+my $output = Output->new();
 
 for my $pair (pairs @ARGV) {
 	my ($source, $target) = @$pair;
 	my $size = file_size($source);
 
-	if (defined($size)) {
-		$total_size += $size;
-	} else {
-		$known_size = 0;
-	}
-
-	push(@tasks, {'source' => $source, 'target' => $target, 'size' => $size});
+	$progress->add_file($size);
 }
 
-for my $task (@tasks) {
-	transfer_data($task);
+for my $pair (pairs @ARGV) {
+	my ($source, $target) = @$pair;
+
+	$progress->next_file() || die "BUG: Progress and args out of sync";
+	transfer_data($source, $target, $progress, $output);
 }
 
 exit 0;
@@ -59,8 +52,11 @@ sub monotime {
 }
 
 sub transfer_data {
-	my $task = shift;
-	my ($source, $target, $source_size) = ($task->{'source'}, $task->{'target'}, $task->{'size'});
+	my $source = shift;
+	my $target = shift;
+	my $progress = shift;
+	my $output = shift;
+
 	my ($in, $out) = open_files($source, $target);
 
 	my $finished = 0;
@@ -82,8 +78,6 @@ sub transfer_data {
 	# Bytes in buffer remaining to write
 	my $buffer_pending_bytes = 0;
 	my $buffer;
-
-	my $progress = progress_init($source_size || 0);
 
 	# Loop until we have both exhausted the input and cleared the output buffer
 	until ($finished) {
@@ -119,15 +113,15 @@ sub transfer_data {
 
 		# Record stats if we've received SIGALRM or have hit EOF and finished writing
 		if ($alarmed || $finished) {
-			progress_update($progress, $current_bytes_read);
-			progress_finish() if $finished;
+			$progress->update_stats($current_bytes_read - $buffer_pending_bytes);
+			$output->print_progress($progress);
 
 			$alarmed = 0;
 			$current_bytes_read = 0;
 		}
 	}
 	alarm(0);
-	close_files($task, $in, $out);
+	close_files($source, $target, $in, $out);
 }
 
 sub open_files {
@@ -150,18 +144,19 @@ sub open_files {
 }
 
 sub close_files {
-	my $task = shift;
 	my $source = shift;
 	my $target = shift;
+	my $in = shift;
+	my $out = shift;
 
 	# Errors from writing are more likely, but also more critical, so close that first
-	close $target
-		or die $! ? "Error closing target file $task->{'target'}: $!"
-		: "Exit status $? from $task->{'target'}\n";
+	close $out
+		or die $! ? "Error closing target file $target: $!"
+		: "Exit status $? from $target\n";
 
-	close $source
-		or die $! ? "Error closing source file $task->{'source'}: $!"
-		: "Exit status $? from $task->{'source'}\n";
+	close $in
+		or die $! ? "Error closing source file $source: $!"
+		: "Exit status $? from $source\n";
 }
 
 sub file_size {
@@ -181,8 +176,7 @@ sub file_size {
 	return $size;
 }
 
-
-# Formatting and stats functions
+package Output;
 
 sub printable_seconds {
 	my $seconds = shift;
@@ -248,47 +242,6 @@ sub printable_bytes {
 		}
 	}
 	return $ret;
-}
-
-sub progress_bar {
-	my $width = shift;
-	my $chars = shift;
-	my $pos = shift;
-
-	return '' if ($width < 1);
-	$pos = 1.0 if $pos > 1;
-
-	my $bgch = substr($chars, 0, 1);
-	my $fillch = substr($chars, -1, 1);
-	my $intermediates = substr($chars, 1, -1);
-	my $steps = (length($chars) - 2) * $width;
-	$steps ||= $width;
-
-	my $fill = int($width * $pos);
-	my $bar = $fillch x $fill;
-
-	if ($intermediates && $fill < $width) {
-		$bar .= substr($intermediates, ($steps * $pos) % length($intermediates), 1);
-	}
-
-	$bar . ($bgch x ($width - length($bar)))
-}
-
-sub progress_init {
-	my $source_size = shift;
-	my $progress_chars = shift || "  ▁▂▃▄▅▆▇█";
-	my @spinner_states = shift || ("-    ", " -   ", "  -  ", "   - ", "    -", "   - ", "  -  ", " -   ");
-	my $now = monotime;
-	{
-		'progress_chars' => $progress_chars,
-		'spinner_states' => \@spinner_states,
-		'iteration' => 0,
-		'source_size' => $source_size,
-		'total_bytes_read' => 0,
-		'start_time' => $now,
-		'last_timestamp' => $now,
-		'transfer_rate' => -1,
-	}
 }
 
 sub bar_init {
@@ -367,73 +320,257 @@ sub render_eta {
 	$eta
 }
 
-sub progress_update {
-	my $state = shift;
-	my $bytes_read = shift;
-	my $now = shift || monotime();
+sub progress_bar {
+	my $width = shift;
+	my $chars = shift;
+	my $pos = shift;
 
-	my $total_bytes_read = ($state->{'total_bytes_read'} += $bytes_read);
-	my $source_size = $state->{'source_size'};
-	my $transfer_rate = $state->{'transfer_rate'};
-	my $iteration = $state->{'iteration'}++;
-	my $last_timestamp = $state->{'last_timestamp'};
-	my $total_elapsed = $now - $state->{'start_time'};
-	my $elapsed = $now - $last_timestamp;
+	return '' if ($width < 1);
+	$pos = 1.0 if $pos > 1;
 
-	$state->{'last_timestamp'} = $now;
+	my $bgch = substr($chars, 0, 1);
+	my $fillch = substr($chars, -1, 1);
+	my $intermediates = substr($chars, 1, -1);
+	my $steps = (length($chars) - 2) * $width;
+	$steps ||= $width;
 
-	if ($elapsed == 0) { $elapsed = 1; }
-	my $current_rate = ( $bytes_read / $elapsed );
-	my $overall_rate = ( $total_bytes_read / $total_elapsed);
+	my $fill = int($width * $pos);
+	my $bar = $fillch x $fill;
 
-	if ($transfer_rate == -1) {
-		# Set the initial value to the only one we have
-		$transfer_rate = $current_rate;
-	} else {
-		# Exponentially smooth our overall throughput for ETA purposes
-		# A higher smoothing value weighs the most recent value less
-		my $smoothing = 0.8;
-		$transfer_rate = ((1 - $smoothing) * $current_rate) + ($smoothing * $transfer_rate);
+	if ($intermediates && $fill < $width) {
+		$bar .= substr($intermediates, ($steps * $pos) % length($intermediates), 1);
 	}
-	$state->{'transfer_rate'} = $transfer_rate;
+
+	$bar . ($bgch x ($width - length($bar)))
+}
+
+# apt install libterm-readkey-perl on Debian derivatives eg Ubuntu
+use Term::ReadKey;
+
+sub new {
+	my $class = shift;
+	my $progress_chars = shift || "  ▁▂▃▄▅▆▇█";
+	my @spinner_states = shift || ("-    ", " -   ", "  -  ", "   - ", "    -", "   - ", "  -  ", " -   ");
+
+	bless {
+		'last_lines' => 0,
+		'iteration' => 0,
+		'progress_chars' => $progress_chars,
+		'spinner_states' => \@spinner_states,
+		'iteration' => 0, }, $class
+}
+
+sub print_progress {
+	my $self = shift;
+	my $stats = shift;
+
+	my $iteration = $self->{'iteration'}++;
 
 	# find terminal length, extrapolate bar length
 	my ($wchar, $hcar, $wpixels, $hpixels) = GetTerminalSize();
 	# no more ridiculously over-long meters please
 	if ($wchar > 80) { $wchar = 80; }
-	# leave one extra character so we can print a \n to keep things cleaner if user resizes the term
-	$wchar -= 1;
 
-	# clear last status line before printing a new one
-	print STDERR $clearline if $iteration > 0;
+	# Move the cursor above our previous bars
+	print STDERR ($cursorup x $self->{'last_lines'}) if $self->{'last_lines'} > 0;
+	$self->{'last_lines'} = 0;
 
 	my $bar = bar_init();
 
-	bar_add($bar, 0, sprintf(' %s [%s] [AVG %s/s',
-	                         printable_seconds($total_elapsed),
-	                         printable_bytes($total_bytes_read),
-							 printable_bytes($overall_rate)));
-	bar_add($bar, 1, sprintf(" CUR %s/s", printable_bytes ($current_rate)));
+	bar_add($bar, 0, sprintf('[%s%s] [%s] [',
+		$stats->total_files() > 1 ? 'CUR ' : '',
+		printable_bytes($stats->current_bytes_done()),
+		printable_seconds($stats->current_time_elapsed())));
+
+	if ($stats->total_files() > 1) {
+		bar_add($bar, 0, sprintf('CUR %s/s',
+			printable_bytes($stats->{'throughput_instant'})));
+	} else {
+		bar_add($bar, 0, sprintf('AVG %s/s',
+			printable_bytes($stats->{'throughput_average'})));
+		bar_add($bar, 1, sprintf(' CUR %s/s',
+			printable_bytes($stats->{'throughput_instant'})));
+	}
+
 	bar_add($bar, 0, ']');
 
-	if ($source_size) {
-		my $fraction_done = $total_bytes_read / $source_size;
+	if ($stats->current_bytes()) {
+		my $fraction_done = $stats->current_bytes_done() / $stats->current_bytes();
 		$fraction_done = 1.0 if $fraction_done > 1;
 
 		bar_add($bar, 4, ' [');
-		bar_add($bar, 4, sub { progress_bar($_[0], $state->{'progress_chars'}, $fraction_done) }, 1);
+		bar_add($bar, 4, sub { progress_bar($_[0], $self->{'progress_chars'}, $fraction_done) }, 1);
 		bar_add($bar, 4, ']');
 		bar_add($bar, 3, sprintf(" %3d%%", $fraction_done * 100));
+
+		my $eta = render_eta($stats->current_bytes(), $stats->current_bytes_done(), $stats->{'throughput_smooth'});
+		bar_add($bar, 2, " ETA $eta") if $eta;
 	} else {
-		bar_add($bar, 2, ' [' . $state->{'spinner_states'}[$iteration % (scalar(@{$state->{'spinner_states'}}))] . ']');
+		bar_add($bar, 2, ' [' . $self->{'spinner_states'}[$iteration % (scalar(@{$self->{'spinner_states'}}))] . ']');
 	}
 
-	my $eta = render_eta($source_size, $total_bytes_read, $transfer_rate);
-	bar_add($bar, 2, " ETA $eta") if $eta;
+	$self->{'last_lines'}++;
+	print STDERR bar_render($bar, $wchar) . "$cleartoend\n";
 
-	print STDERR bar_render($bar, $wchar);
+	return unless $stats->total_files() > 1;
+
+	$bar = bar_init();
+	bar_add($bar, 0, sprintf('[TOT %s] [%s] [AVG %s/s]',
+	                         printable_bytes($stats->total_bytes_done()),
+	                         printable_seconds($stats->total_time_elapsed()),
+							 printable_bytes($stats->total_bytes_done() / $stats->total_time_elapsed())));
+
+	if ($stats->total_bytes()) {
+		my $fraction_done = $stats->total_bytes_done() / $stats->total_bytes();
+		$fraction_done = 1.0 if $fraction_done > 1;
+
+		bar_add($bar, 4, ' [');
+		bar_add($bar, 4, sub { progress_bar($_[0], $self->{'progress_chars'}, $fraction_done) }, 1);
+		bar_add($bar, 4, ']');
+		bar_add($bar, 3, sprintf(" %3d%%", $fraction_done * 100));
+
+		my $eta = render_eta($stats->total_bytes(), $stats->total_bytes_done(), $stats->{'throughput_smooth'});
+		bar_add($bar, 2, " ETA $eta") if $eta;
+	} else {
+		my $fraction_done = $stats->done_files() / $stats->total_files();
+		bar_add($bar, 4, sub { progress_bar($_[0], $self->{'progress_chars'}, $fraction_done) }, 1);
+		bar_add($bar, 3, sprintf(" %d/%d", $stats->done_files(), $stats->total_files()));
+	}
+
+	$self->{'last_lines'}++;
+	print STDERR bar_render($bar, $wchar) . "$cleartoend\n";
 }
 
-sub progress_finish() {
-	print STDERR "\n";
+package Progress;
+
+sub new {
+	my $class = shift;
+	my $now = shift || main::monotime();
+	bless {
+		'time_start' => $now,
+		'time_prev' => $now,
+		'done' => [],
+		'pending' => [],
+		'current' => undef,
+		'size' => 0,
+		'bytes_done' => 0,
+		'throughput_average' => undef,
+		'throughput_smooth' => undef,
+		'throughput_instant' => undef,
+	}, $class
+
+}
+
+use Data::Dumper;
+
+sub done_files {
+	my $self = shift;
+	scalar @{$self->{'done'}}
+}
+
+sub pending_files {
+	my $self = shift;
+	scalar @{$self->{'pending'}}
+}
+
+sub total_files {
+	my $self = shift;
+
+	$self->done_files() + $self->pending_files() + ($self->{'current'} ? 1 : 0)
+}
+
+sub current_time_elapsed {
+	my $self = shift;
+
+	$self->{'time_prev'} - $self->{'current'}->{'time_start'}
+}
+
+sub current_bytes_done {
+	my $self = shift;
+
+	$self->{'current'}->{'bytes_done'}
+}
+
+sub current_bytes {
+	my $self = shift;
+
+	$self->{'current'}->{'size'}
+}
+
+sub total_time_elapsed {
+	my $self = shift;
+
+	$self->{'time_prev'} - $self->{'time_start'}
+}
+
+sub total_bytes_done {
+	my $self = shift;
+
+	$self->{'bytes_done'}
+}
+
+sub total_bytes {
+	my $self = shift;
+
+	$self->{'size'}
+}
+
+sub add_file {
+	my $self = shift;
+	my $size = shift;
+
+	if (defined($size) && defined($self->{'size'})) {
+		$self->{'size'} += $size;
+	} else {
+		$self->{'size'} = undef;
+	}
+
+	push(@{$self->{'pending'}}, { 'size' => $size, 'time_start' => undef, 'bytes_done' => 0 });
+}
+
+# Move to the next file, return falsey if we're done
+sub next_file {
+	my $self = shift;
+	my $now = shift || main::monotime();
+
+	unless (defined($self->{'time_start'})) {
+		$self->{'time_start'} = $now;
+	}
+
+	push(@{$self->{'done'}}, $self->{'current'}) if $self->{'current'};
+
+	my $current = shift(@{$self->{'pending'}});
+	$current->{'time_start'} = $now;
+	$self->{'current'} = $current;
+	$current
+}
+
+sub update_stats {
+	my $self = shift;
+	my $bytes_new = shift;
+	my $now = shift || main::monotime();
+
+	die "No active file" unless $self->{'current'};
+
+	$self->{'current'}->{'bytes_done'} += $bytes_new;
+	my $bytes_done = ($self->{'bytes_done'} += $bytes_new);
+	my $elapsed = $now - $self->{'time_prev'};
+	my $total_elapsed = $now - $self->{'time_start'};
+	$self->{'time_prev'} = $now;
+
+	if ($bytes_new > 0 && $elapsed > 0) {
+		$self->{'throughput_instant'} = $bytes_new / $elapsed;
+		$self->{'throughput_average'} = $bytes_done / $total_elapsed;
+
+		if (defined($self->{'throughput_smooth'})) {
+			# Basic exponential smoothing
+			# Set smoothing lower to weigh more recent values higher
+			my $smoothing = 0.8;
+			$self->{'throughput_smooth'} = ($smoothing * $self->{'throughput_smooth'}) +
+				((1 - $smoothing) * $self->{'throughput_instant'});
+		} else {
+			# Set to the best value we have
+			$self->{'throughput_smooth'} = $self->{'throughput_average'};
+		}
+	}
 }
