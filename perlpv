@@ -179,6 +179,68 @@ sub file_size {
 	return $size;
 }
 
+package Line;
+# A single line with optional and required segments to render
+sub new {
+	my $class = shift;
+	bless { 'segments' => [], 'widths' => {} }, $class
+}
+
+# Add a string to the line  with a given priority
+# 0 is always rendered, >1 are only rendered if there is space, higher values
+# dropped first
+# A sub may be added which will receive the remaining width as an argument.
+# This should be given a minimum acceptable width as the fourth argument
+sub add {
+	my $self = shift;
+	my $priority = shift;
+	my $content = shift;
+	my $width = shift || length($content);
+
+	$self->{'widths'}{$priority} += $width;
+	push(@{$self->{'segments'}}, [$priority, $content]);
+}
+
+# Render the bar and reset ready for the next line
+sub render {
+	my $self = shift;
+	my $max_width = shift;
+
+	my $widths = $self->{'widths'};
+
+	my $width = 0;
+	my $priority_limit = 0;
+	for my $pri (sort keys %{$widths}) {
+		my $pri_width = $widths->{$pri};
+		if ($width + $pri_width >= $max_width) {
+			$priority_limit = $pri - 1;
+			last;
+		}
+		$priority_limit = $pri;
+		$width += $pri_width;
+	}
+
+	$priority_limit ||= 0;
+	my $remaining_width = $max_width - $width;
+	my $ret = '';
+
+	for my $segment (@{$self->{'segments'}}) {
+		my ($priority, $content) = @{$segment};
+		if ($priority <= $priority_limit) {
+			if (ref $content eq 'CODE') {
+				$ret .= &$content($remaining_width);
+			} else {
+				$ret .= $content;
+			}
+		}
+	}
+
+	$self->{'segments'} = [];
+	$self->{'widths'} = {};
+
+	$ret;
+}
+
 package Output;
 
 sub printable_seconds {
@@ -245,60 +307,6 @@ sub printable_bytes {
 		}
 	}
 	return $ret;
-}
-
-sub bar_init {
-	{ 'segments' => [], 'widths' => {} }
-}
-
-# Add a string to the bar with a given priority
-# 0 is always rendered, >1 are only rendered if there is space, higher values
-# dropped first
-# A sub may be added which will receive the remaining width as an argument.
-# This should be given a minimum acceptable width as the fourth argument
-sub bar_add {
-	my $bar = shift;
-	my $priority = shift;
-	my $content = shift;
-	my $width = shift || length($content);
-
-	$bar->{'widths'}{$priority} += $width;
-	push(@{$bar->{'segments'}}, [$priority, $content]);
-}
-
-sub bar_render {
-	my $bar = shift;
-	my $max_width = shift;
-
-	my $widths = $bar->{'widths'};
-
-	my $width = 0;
-	my $priority_limit = 0;
-	for my $pri (sort keys %{$widths}) {
-		my $pri_width = $widths->{$pri};
-		if ($width + $pri_width >= $max_width) {
-			$priority_limit = $pri - 1;
-			last;
-		}
-		$priority_limit = $pri;
-		$width += $pri_width;
-	}
-
-	$priority_limit ||= 0;
-	my $remaining_width = $max_width - $width;
-	my $ret = '';
-
-	for my $segment (@{$bar->{'segments'}}) {
-		my ($priority, $content) = @{$segment};
-		if ($priority <= $priority_limit) {
-			if (ref $content eq 'CODE') {
-				$ret .= &$content($remaining_width);
-			} else {
-				$ret .= $content;
-			}
-		}
-	}
-	$ret;
 }
 
 sub render_eta {
@@ -375,76 +383,75 @@ sub print_progress {
 	print STDERR ($cursorup x $self->{'last_lines'}) if $self->{'last_lines'} > 0;
 	$self->{'last_lines'} = 0;
 
-	my $bar = bar_init();
+	my $line = Line->new();
 
-	bar_add($bar, 0, sprintf('[%s%s] [%s] [',
-		$stats->total_files() > 1 ? 'CUR ' : '',
-		printable_bytes($stats->current_bytes_done()),
-		printable_seconds($stats->current_time_elapsed())));
+	$line->add(0, sprintf('[%s%s] [%s] [',
+		                  $stats->total_files() > 1 ? 'CUR ' : '',
+		                  printable_bytes($stats->current_bytes_done()),
+		                  printable_seconds($stats->current_time_elapsed())));
 
 	if ($stats->total_files() > 1) {
-		bar_add($bar, 0, sprintf('CUR %s/s',
-			printable_bytes($stats->{'throughput_instant'})));
+		$line->add(0, sprintf('CUR %s/s',
+			                  printable_bytes($stats->{'throughput_instant'})));
 	} else {
-		bar_add($bar, 0, sprintf('AVG %s/s',
-			printable_bytes($stats->{'throughput_average'})));
-		bar_add($bar, 1, sprintf(' CUR %s/s',
-			printable_bytes($stats->{'throughput_instant'})));
+		$line->add(0, sprintf('AVG %s/s',
+			                  printable_bytes($stats->{'throughput_average'})));
+		$line->add(1, sprintf(' CUR %s/s',
+			                  printable_bytes($stats->{'throughput_instant'})));
 	}
 
-	bar_add($bar, 0, ']');
+	$line->add(0, ']');
 
 	if ($stats->current_bytes()) {
 		my $fraction_done = $stats->current_bytes_done() / $stats->current_bytes();
 		$fraction_done = 1.0 if $fraction_done > 1;
 
-		bar_add($bar, 4, ' [');
-		bar_add($bar, 4, sub { progress_bar($_[0], $self->{'progress_chars'}, $fraction_done) }, 1);
-		bar_add($bar, 4, ']');
-		bar_add($bar, 3, sprintf(" %3d%%", $fraction_done * 100));
+		$line->add(4, ' [');
+		$line->add(4, sub { progress_bar($_[0], $self->{'progress_chars'}, $fraction_done) }, 1);
+		$line->add(4, ']');
+		$line->add(3, sprintf(" %3d%%", $fraction_done * 100));
 
 		my $eta = render_eta($stats->current_bytes(), $stats->current_bytes_done(), $stats->{'throughput_smooth'});
-		bar_add($bar, 2, " ETA $eta") if $eta;
+		$line->add(2, " ETA $eta") if $eta;
 	} else {
-		bar_add($bar, 2, ' [' . $self->{'spinner_states'}[$iteration % (scalar(@{$self->{'spinner_states'}}))] . ']');
+		$line->add(2, ' [' . $self->{'spinner_states'}[$iteration % (scalar(@{$self->{'spinner_states'}}))] . ']');
 	}
 
 	$self->{'last_lines'}++;
-	print STDERR bar_render($bar, $wchar) . "$cleartoend\n";
+	print STDERR $line->render($wchar) . "$cleartoend\n";
 
 	return unless $stats->total_files() > 1;
 
-	$bar = bar_init();
-	bar_add($bar, 0, sprintf('[TOT %s] [%s] [AVG %s/s]',
-	                         printable_bytes($stats->total_bytes_done()),
-	                         printable_seconds($stats->total_time_elapsed()),
-							 printable_bytes($stats->total_bytes_done() / $stats->total_time_elapsed())));
+	$line->add(0, sprintf('[TOT %s] [%s] [AVG %s/s]',
+	                      printable_bytes($stats->total_bytes_done()),
+	                      printable_seconds($stats->total_time_elapsed()),
+	                      printable_bytes($stats->total_bytes_done() / $stats->total_time_elapsed())));
 
 	if ($stats->total_bytes()) {
 		my $fraction_done = $stats->total_bytes_done() / $stats->total_bytes();
 		$fraction_done = 1.0 if $fraction_done > 1;
 
-		bar_add($bar, 4, ' [');
-		bar_add($bar, 4, sub { progress_bar($_[0], $self->{'progress_chars'}, $fraction_done) }, 1);
-		bar_add($bar, 4, ']');
-		bar_add($bar, 3, sprintf(" %3d%%", $fraction_done * 100));
+		$line->add(4, ' [');
+		$line->add(4, sub { progress_bar($_[0], $self->{'progress_chars'}, $fraction_done) }, 1);
+		$line->add(4, ']');
+		$line->add(3, sprintf(" %3d%%", $fraction_done * 100));
 
 		my $eta = render_eta($stats->total_bytes(), $stats->total_bytes_done(), $stats->{'throughput_smooth'});
-		bar_add($bar, 2, " ETA $eta") if $eta;
+		$line->add(2, " ETA $eta") if $eta;
 	} else {
 		my $fraction_done = $stats->done_files() / $stats->total_files();
-		bar_add($bar, 4, ' [');
-		bar_add($bar, 4, sub { progress_bar($_[0], $self->{'progress_chars'}, $fraction_done) }, 1);
-		bar_add($bar, 4, ']');
-		bar_add($bar, 3, sprintf(" %d of %d", $stats->done_files() + 1, $stats->total_files()));
+		$line->add(4, ' [');
+		$line->add(4, sub { progress_bar($_[0], $self->{'progress_chars'}, $fraction_done) }, 1);
+		$line->add(4, ']');
+		$line->add(3, sprintf(" %d of %d", $stats->done_files() + 1, $stats->total_files()));
 	}
 
 	$self->{'last_lines'}++;
-	print STDERR bar_render($bar, $wchar) . "$cleartoend\n";
+	print STDERR $line->render($wchar) . "$cleartoend\n";
 }
 
 package Progress;
-
+# Statistics gathering for file writing
 sub new {
 	my $class = shift;
 	my $now = shift || main::monotime();
