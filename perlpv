@@ -9,6 +9,9 @@ use Fcntl qw(O_RDONLY);
 use List::Util qw(pairs);
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC alarm);
 
+# apt install libterm-readkey-perl on Debian derivatives eg Ubuntu
+use Term::ReadKey ();
+
 # We need to turn off buffering of STDERR to get rapid display of progress.
 STDERR->autoflush(1);
 binmode(STDERR, ":encoding(UTF-8)");
@@ -344,9 +347,6 @@ sub progress_bar {
 	$bar . ($bgch x ($width - length($bar)))
 }
 
-# apt install libterm-readkey-perl on Debian derivatives eg Ubuntu
-use Term::ReadKey;
-
 sub new {
 	my $class = shift;
 	my $progress_chars = shift || "  ▁▂▃▄▅▆▇█";
@@ -367,7 +367,7 @@ sub print_progress {
 	my $iteration = $self->{'iteration'}++;
 
 	# find terminal length, extrapolate bar length
-	my ($wchar, $hcar, $wpixels, $hpixels) = GetTerminalSize();
+	my ($wchar, $hcar, $wpixels, $hpixels) = Term::ReadKey::GetTerminalSize();
 	# no more ridiculously over-long meters please
 	if ($wchar > 80) { $wchar = 80; }
 
@@ -433,8 +433,10 @@ sub print_progress {
 		bar_add($bar, 2, " ETA $eta") if $eta;
 	} else {
 		my $fraction_done = $stats->done_files() / $stats->total_files();
+		bar_add($bar, 4, ' [');
 		bar_add($bar, 4, sub { progress_bar($_[0], $self->{'progress_chars'}, $fraction_done) }, 1);
-		bar_add($bar, 3, sprintf(" %d/%d", $stats->done_files(), $stats->total_files()));
+		bar_add($bar, 4, ']');
+		bar_add($bar, 3, sprintf(" %d of %d", $stats->done_files() + 1, $stats->total_files()));
 	}
 
 	$self->{'last_lines'}++;
@@ -461,15 +463,15 @@ sub new {
 
 }
 
-use Data::Dumper;
-
 sub done_files {
 	my $self = shift;
+
 	scalar @{$self->{'done'}}
 }
 
 sub pending_files {
 	my $self = shift;
+
 	scalar @{$self->{'pending'}}
 }
 
