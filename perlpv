@@ -359,7 +359,7 @@ sub progress_bar {
 sub new {
 	my $class = shift;
 	my $progress_chars = shift || "  ▁▂▃▄▅▆▇█";
-	my @spinner_states = shift || ("-    ", " -   ", "  -  ", "   - ", "    -", "   - ", "  -  ", " -   ");
+	my @spinner_states = shift || ("[ ●   ]", "[  ●  ]", "[   ● ]", "[    ●]", "[   ● ]", "[  ●  ]", "[ ●   ]", "[●    ]");
 
 	bless {
 		'last_lines' => 0,
