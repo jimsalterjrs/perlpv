@@ -220,7 +220,8 @@ sub render {
 		$width += $pri_width;
 	}
 
-	$priority_limit ||= 0;
+	$priority_limit = 0 if $priority_limit < 0;
+
 	my $remaining_width = $max_width - $width;
 	my $ret = '';
 
