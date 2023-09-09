@@ -283,6 +283,8 @@ sub printable_bytes {
 	my $num = shift;
 	my $length = shift || 5;
 
+	$num = 0 unless defined($num);
+
 	my @size_prefix = ('B', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y');
 	my @formats = ('%*.2f%s', '%*.1f%s', '%*.0f%s');
 	my $divisor = 1024;
