@@ -386,7 +386,7 @@ sub print_progress {
 
 	my $line = Line->new();
 
-	$line->add(0, sprintf('[%s%s] [%s] [',
+	$line->add(0, sprintf('%s%s %s [',
 		                  $stats->total_files() > 1 ? 'CUR ' : '',
 		                  printable_bytes($stats->current_bytes_done()),
 		                  printable_seconds($stats->current_time_elapsed())));
@@ -415,7 +415,7 @@ sub print_progress {
 		my $eta = render_eta($stats->current_bytes(), $stats->current_bytes_done(), $stats->{'throughput_smooth'});
 		$line->add(2, " ETA $eta") if $eta;
 	} else {
-		$line->add(2, ' [' . $self->{'spinner_states'}[$iteration % (scalar(@{$self->{'spinner_states'}}))] . ']');
+		$line->add(2, ' ' . $self->{'spinner_states'}[$iteration % (scalar(@{$self->{'spinner_states'}}))]);
 	}
 
 	$self->{'last_lines'}++;
@@ -423,7 +423,7 @@ sub print_progress {
 
 	return unless $stats->total_files() > 1;
 
-	$line->add(0, sprintf('[TOT %s] [%s] [AVG %s/s]',
+	$line->add(0, sprintf('TOT %s %s [AVG %s/s]',
 	                      printable_bytes($stats->total_bytes_done()),
 	                      printable_seconds($stats->total_time_elapsed()),
 	                      printable_bytes($stats->total_bytes_done() / $stats->total_time_elapsed())));
